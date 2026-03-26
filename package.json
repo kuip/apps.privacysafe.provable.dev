@@ -9,7 +9,7 @@
     "serve": "vite preview"
   },
   "dependencies": {
-    "@kuip/provable-sdk": "file:../../../web/provable-sdk/provable-sdk-js",
+    "@kuip/provable-sdk": "^0.0.9",
     "vue": "^3.5.31"
   },
   "devDependencies": {
