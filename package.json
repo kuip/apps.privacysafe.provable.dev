@@ -1,0 +1,22 @@
+{
+  "name": "kayros.app.provable.dev",
+  "version": "0.1.0",
+  "description": "Kayros notarization app for PrivacySafe",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build && node scripts/prepare-pack.mjs",
+    "serve": "vite preview"
+  },
+  "dependencies": {
+    "@kuip/provable-sdk": "file:../../../web/provable-sdk/provable-sdk-js",
+    "vue": "^3.5.31"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.1",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vue-tsc": "^3.1.4"
+  }
+}

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Kayros">
+  <rect width="256" height="256" rx="40" fill="#0b1f33"/>
+  <path d="M52 64h54l26 40 30-40h42l-52 64 56 64h-54l-30-40-30 40H44l58-68-50-60z" fill="#f2efe6"/>
+  <circle cx="186" cy="72" r="18" fill="#dca35c"/>
+</svg>
