@@ -3,7 +3,7 @@
   "appDomain": "kayros.app.provable.dev",
   "icon": "logo.svg",
   "description": "Kayros notarization and record lookup for PrivacySafe apps.",
-  "version": "0.1.4",
+  "version": "0.1.8",
   "components": {
     "/index.html": {
       "runtime": "web-gui",
@@ -40,6 +40,15 @@
       "capsRequested": {
         "storage": {
           "appFS": "default"
+        },
+        "connectToExternal": {
+          "fetch": [
+            {
+              "schema": "https",
+              "domain": "kayros.provable.dev",
+              "pathPrefix": "/api/"
+            }
+          ]
         },
         "logToPlatform": true
       },

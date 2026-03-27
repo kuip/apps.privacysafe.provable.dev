@@ -16,6 +16,45 @@ function updateStatus(message: string): void {
   }
 }
 
+function getW3N() {
+  return (globalThis as typeof globalThis & { w3n?: typeof w3n }).w3n;
+}
+
+function formatError(err: unknown): string {
+  if (err instanceof Error) {
+    const extra = Object.entries(err as Error & Record<string, unknown>)
+      .filter(([key]) => key !== 'message' && key !== 'stack' && key !== 'name')
+      .reduce<Record<string, unknown>>((acc, [key, value]) => {
+        acc[key] = value;
+        return acc;
+      }, {});
+
+    return Object.keys(extra).length > 0
+      ? `${err.message} ${JSON.stringify(extra)}`
+      : err.message;
+  }
+
+  if (typeof err === 'string') {
+    return err;
+  }
+
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
+async function reportServiceError(context: string, err: unknown): Promise<void> {
+  const detail = formatError(err);
+  updateStatus(`Kayros service failed: ${detail}`);
+  console.error(`Kayros service error: ${context}`, err);
+  await getW3N()?.log?.('error', `Kayros service error: ${context}`, {
+    detail,
+    error: err,
+  });
+}
+
 type ProvableSdkModule = typeof import('@kuip/provable-sdk');
 
 let sdkPromise: Promise<ProvableSdkModule> | undefined;
@@ -152,38 +191,60 @@ async function handleCall(
   }
 }
 
-updateStatus('Kayros service registering…');
+function bootstrapService(attempt = 0): void {
+  const runtime = getW3N();
+  if (!runtime?.rpc?.exposeService) {
+    if (attempt === 0) {
+      updateStatus('Kayros service waiting for runtime…');
+    }
+    if (attempt < 100) {
+      window.setTimeout(() => bootstrapService(attempt + 1), 50);
+    } else {
+      void reportServiceError('runtime unavailable', 'w3n runtime was not injected into service component');
+    }
+    return;
+  }
 
-try {
-  w3n.rpc!.exposeService!(KAYROS_SERVICE_NAME, {
-    next(connection) {
-      updateStatus('Kayros service connected');
-      connection.watch({
-        next: async call => {
-          if (call.msgType === 'start') {
-            await handleCall(connection, call);
-          }
-        },
-        complete: () => {
-          setWaitingStatus();
-        },
-        error: async err => {
-          updateStatus('Kayros service failed');
-          await w3n.log?.('error', 'Kayros service connection failed', err);
-        },
-      });
-    },
-    complete: () => {
-      updateStatus('Kayros service stopped');
-    },
-    error: async err => {
-      updateStatus('Kayros service failed');
-      await w3n.log?.('error', 'Kayros service failed to expose', err);
-    },
-  });
-  setWaitingStatus();
-  void w3n.log?.('info', 'Kayros service exposed');
-} catch (err) {
-  updateStatus('Kayros service failed');
-  void w3n.log?.('error', 'Kayros service failed during startup', err);
+  updateStatus('Kayros service registering…');
+
+  try {
+    runtime.rpc.exposeService(KAYROS_SERVICE_NAME, {
+      next(connection) {
+        updateStatus('Kayros service connected');
+        connection.watch({
+          next: async call => {
+            if (call.msgType === 'start') {
+              await handleCall(connection, call);
+            }
+          },
+          complete: () => {
+            setWaitingStatus();
+          },
+          error: async err => {
+            await reportServiceError('connection failed', err);
+          },
+        });
+      },
+      complete: () => {
+        updateStatus('Kayros service stopped');
+      },
+      error: async err => {
+        await reportServiceError('failed to expose', err);
+      },
+    });
+    setWaitingStatus();
+    void runtime.log?.('info', 'Kayros service exposed');
+  } catch (err) {
+    void reportServiceError('failed during startup', err);
+  }
 }
+
+bootstrapService();
+
+window.addEventListener('error', event => {
+  void reportServiceError('window error', event.error ?? event.message);
+});
+
+window.addEventListener('unhandledrejection', event => {
+  void reportServiceError('unhandled rejection', event.reason);
+});
