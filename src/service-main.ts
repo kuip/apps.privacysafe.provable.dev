@@ -1,10 +1,3 @@
-import {
-  get_record_by_hash,
-  getRecordUrl,
-  prove_single_hash,
-  setKayrosHost,
-} from '@kuip/provable-sdk';
-import { readSettings, writeSettings } from '@/lib/settings';
 import type {
   KayrosSettings,
   LookupRecordRequest,
@@ -12,6 +5,7 @@ import type {
   RegisterHashRequest,
   RegisterHashResult,
 } from '@/lib/types';
+import { readSettings, writeSettings } from '@/lib/settings';
 import { KAYROS_SERVICE_NAME } from '@/lib/constants';
 import { decodeJson, encodeJson } from '@/lib/json-rpc';
 
@@ -20,6 +14,21 @@ function updateStatus(message: string): void {
   if (el) {
     el.textContent = message;
   }
+}
+
+type ProvableSdkModule = typeof import('@kuip/provable-sdk');
+
+let sdkPromise: Promise<ProvableSdkModule> | undefined;
+
+async function getProvableSdk(): Promise<ProvableSdkModule> {
+  if (!sdkPromise) {
+    sdkPromise = import('@kuip/provable-sdk');
+  }
+  return await sdkPromise;
+}
+
+function setWaitingStatus(): void {
+  updateStatus('Kayros service waiting for connection…');
 }
 
 function mergeSettings(base: KayrosSettings, overrides?: Partial<KayrosSettings>): KayrosSettings {
@@ -42,8 +51,9 @@ class KayrosService {
   async registerHash(request: RegisterHashRequest): Promise<RegisterHashResult> {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
-    setKayrosHost(resolved.kayrosHost);
-    const response = await prove_single_hash(request.hash.trim(), {
+    const sdk = await getProvableSdk();
+    sdk.setKayrosHost(resolved.kayrosHost);
+    const response = await sdk.prove_single_hash(request.hash.trim(), {
       dataType: resolved.dataType,
       apiKey: resolved.userKey || undefined,
     });
@@ -55,15 +65,16 @@ class KayrosService {
         dataType: resolved.dataType,
       },
       response,
-      recordUrl: response.hash ? getRecordUrl(response.hash, resolved.dataType) : undefined,
+      recordUrl: response.hash ? sdk.getRecordUrl(response.hash, resolved.dataType) : undefined,
     };
   }
 
   async lookupRecord(request: LookupRecordRequest): Promise<LookupRecordResult> {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
-    setKayrosHost(resolved.kayrosHost);
-    const response = await get_record_by_hash(request.hash.trim(), {
+    const sdk = await getProvableSdk();
+    sdk.setKayrosHost(resolved.kayrosHost);
+    const response = await sdk.get_record_by_hash(request.hash.trim(), {
       dataType: resolved.dataType,
       apiKey: resolved.userKey || undefined,
     });
@@ -75,7 +86,7 @@ class KayrosService {
         dataType: resolved.dataType,
       },
       response,
-      recordUrl: getRecordUrl(request.hash.trim(), resolved.dataType),
+      recordUrl: sdk.getRecordUrl(request.hash.trim(), resolved.dataType),
     };
   }
 }
@@ -87,6 +98,7 @@ async function handleCall(
   call: web3n.rpc.service.CallStart,
 ): Promise<void> {
   const { callNum, method, data } = call;
+  updateStatus(`Kayros service handling ${method}…`);
   try {
     if (method === 'getSettings') {
       await connection.send({
@@ -135,34 +147,43 @@ async function handleCall(
       callStatus: 'error',
       err: err instanceof Error ? { message: err.message } : err,
     });
+  } finally {
+    setWaitingStatus();
   }
 }
 
-updateStatus('Kayros service starting…');
+updateStatus('Kayros service registering…');
 
-w3n.rpc!.exposeService!(KAYROS_SERVICE_NAME, {
-  next(connection) {
-    updateStatus('Kayros service ready');
-    connection.watch({
-      next: async call => {
-        if (call.msgType === 'start') {
-          await handleCall(connection, call);
-        }
-      },
-      complete: () => {
-        updateStatus('Kayros service idle');
-      },
-      error: async err => {
-        updateStatus('Kayros service failed');
-        await w3n.log?.('error', 'Kayros service connection failed', err);
-      },
-    });
-  },
-  complete: () => {
-    updateStatus('Kayros service stopped');
-  },
-  error: async err => {
-    updateStatus('Kayros service failed');
-    await w3n.log?.('error', 'Kayros service failed to expose', err);
-  },
-});
+try {
+  w3n.rpc!.exposeService!(KAYROS_SERVICE_NAME, {
+    next(connection) {
+      updateStatus('Kayros service connected');
+      connection.watch({
+        next: async call => {
+          if (call.msgType === 'start') {
+            await handleCall(connection, call);
+          }
+        },
+        complete: () => {
+          setWaitingStatus();
+        },
+        error: async err => {
+          updateStatus('Kayros service failed');
+          await w3n.log?.('error', 'Kayros service connection failed', err);
+        },
+      });
+    },
+    complete: () => {
+      updateStatus('Kayros service stopped');
+    },
+    error: async err => {
+      updateStatus('Kayros service failed');
+      await w3n.log?.('error', 'Kayros service failed to expose', err);
+    },
+  });
+  setWaitingStatus();
+  void w3n.log?.('info', 'Kayros service exposed');
+} catch (err) {
+  updateStatus('Kayros service failed');
+  void w3n.log?.('error', 'Kayros service failed during startup', err);
+}

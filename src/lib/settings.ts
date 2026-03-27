@@ -5,7 +5,7 @@ function normalizeSettings(input?: Partial<KayrosSettings> | null): KayrosSettin
   return {
     kayrosHost: input?.kayrosHost?.trim() || DEFAULT_SETTINGS.kayrosHost,
     dataType: input?.dataType?.trim() || DEFAULT_SETTINGS.dataType,
-    userKey: input?.userKey?.trim() || '',
+    userKey: input?.userKey?.trim() || DEFAULT_SETTINGS.userKey,
   };
 }
 

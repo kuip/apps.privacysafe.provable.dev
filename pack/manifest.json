@@ -7,14 +7,19 @@
   "components": {
     "/index.html": {
       "runtime": "web-gui",
+      "services": {
+        "KayrosNotary": {
+          "thisAppComponents": "*",
+          "otherApps": [
+            "files.app.privacysafe.io"
+          ]
+        }
+      },
       "formFactor": [
         "desktop",
         "tablet"
       ],
       "capsRequested": {
-        "appRPC": [
-          "KayrosNotary"
-        ],
         "storage": {
           "appFS": "default"
         },
@@ -25,34 +30,6 @@
         "height": 760,
         "minWidth": 920,
         "minHeight": 620
-      }
-    },
-    "/service.html": {
-      "runtime": "web-gui",
-      "services": {
-        "KayrosNotary": {
-          "thisAppComponents": "*",
-          "otherApps": [
-            "files.app.privacysafe.io"
-          ]
-        }
-      },
-      "capsRequested": {
-        "storage": {
-          "appFS": "default"
-        },
-        "logToPlatform": true
-      },
-      "windowOpts": {
-        "width": 360,
-        "height": 140,
-        "minWidth": 360,
-        "minHeight": 140,
-        "resizable": false,
-        "minimizable": false,
-        "maximizable": false,
-        "skipTaskbar": true,
-        "frame": false
       }
     }
   },
