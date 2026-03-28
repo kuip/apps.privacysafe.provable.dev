@@ -127,11 +127,7 @@ onMounted(async () => {
   <main class="shell">
     <section class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">PrivacySafe subapp</p>
         <h1>Kayros Notary</h1>
-        <p class="lede">
-          Register an existing content hash with Kayros and look records back up through the same RPC service that Storage can call later.
-        </p>
       </div>
       <img alt="Kayros" class="mark" src="/logo.png" />
     </section>
