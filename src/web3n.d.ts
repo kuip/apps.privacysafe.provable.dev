@@ -69,10 +69,27 @@ declare namespace web3n.storage {
   }
 }
 
+declare namespace web3n.files {
+  interface FileChangeEvent {
+    type: 'file-change';
+  }
+
+  interface ReadonlyFile {
+    readJSON<T>(): Promise<T>;
+    watch?(obs: web3n.rpc.Observer<FileChangeEvent>): (() => void) | void;
+  }
+}
+
 declare const w3n: {
   rpc?: web3n.rpc.RPC;
   storage?: {
     getAppLocalFS(): Promise<web3n.storage.AppLocalFS>;
+  };
+  shell?: {
+    getFSResource?(
+      appDomain: string | undefined,
+      resourceName: string,
+    ): Promise<web3n.files.ReadonlyFile | undefined>;
   };
   log?: (level: string, ...args: unknown[]) => void | Promise<void>;
 };

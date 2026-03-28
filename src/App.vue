@@ -4,6 +4,7 @@ import { callThisAppService } from '@/lib/json-rpc';
 import { KAYROS_SERVICE_NAME } from '@/lib/constants';
 import type {
   KayrosSettings,
+  LookupDataItemResult,
   LookupRecordResult,
   RegisterHashResult,
 } from '@/lib/types';
@@ -16,16 +17,21 @@ const settings = reactive<KayrosSettings>({
 
 const registerHash = ref('');
 const lookupHash = ref('');
+const lookupDataItem = ref('');
 const busy = ref(false);
 const message = ref('');
 const registerResult = ref<RegisterHashResult | null>(null);
 const lookupResult = ref<LookupRecordResult | null>(null);
+const lookupDataItemResult = ref<LookupDataItemResult | null>(null);
 
 const prettyRegister = computed(() => (
   registerResult.value ? JSON.stringify(registerResult.value, null, 2) : ''
 ));
 const prettyLookup = computed(() => (
   lookupResult.value ? JSON.stringify(lookupResult.value, null, 2) : ''
+));
+const prettyLookupDataItem = computed(() => (
+  lookupDataItemResult.value ? JSON.stringify(lookupDataItemResult.value, null, 2) : ''
 ));
 
 async function loadSettings() {
@@ -89,6 +95,24 @@ async function lookupCurrentHash() {
   }
 }
 
+async function lookupCurrentDataItem() {
+  busy.value = true;
+  message.value = '';
+  lookupDataItemResult.value = null;
+  try {
+    lookupDataItemResult.value = await callThisAppService(
+      KAYROS_SERVICE_NAME,
+      'lookupDataItem',
+      {
+        dataItem: lookupDataItem.value,
+      },
+    );
+    message.value = 'Records loaded from Kayros.';
+  } finally {
+    busy.value = false;
+  }
+}
+
 onMounted(async () => {
   busy.value = true;
   try {
@@ -102,7 +126,7 @@ onMounted(async () => {
 <template>
   <main class="shell">
     <section class="hero">
-      <div>
+      <div class="hero-copy">
         <p class="eyebrow">PrivacySafe subapp</p>
         <h1>Kayros Notary</h1>
         <p class="lede">
@@ -117,6 +141,9 @@ onMounted(async () => {
         <h2>Settings</h2>
         <button :disabled="busy" @click="saveSettings">Save</button>
       </div>
+      <p class="panel-text">
+        These values are used by the Kayros RPC service when Storage requests upload-time notarization.
+      </p>
 
       <label>
         <span>Kayros host</span>
@@ -134,14 +161,17 @@ onMounted(async () => {
       </label>
     </section>
 
-    <section class="grid">
-      <article class="panel">
+    <section class="grid grid--triple">
+      <article class="panel panel--action">
         <div class="panel-head">
           <h2>Register hash</h2>
           <button :disabled="busy || !registerHash.trim()" @click="notarizeCurrentHash">
             Notarize
           </button>
         </div>
+        <p class="panel-text">
+          Submit an existing content hash exactly as Storage or another client produced it.
+        </p>
 
         <label>
           <span>Content hash</span>
@@ -152,16 +182,21 @@ onMounted(async () => {
           />
         </label>
 
-        <pre v-if="prettyRegister">{{ prettyRegister }}</pre>
+        <div v-if="prettyRegister" class="result-box">
+          <pre>{{ prettyRegister }}</pre>
+        </div>
       </article>
 
-      <article class="panel">
+      <article class="panel panel--action">
         <div class="panel-head">
           <h2>Lookup record</h2>
           <button :disabled="busy || !lookupHash.trim()" @click="lookupCurrentHash">
             Lookup
           </button>
         </div>
+        <p class="panel-text">
+          Load a previously registered record from Kayros using the same hash value.
+        </p>
 
         <label>
           <span>Kayros record hash</span>
@@ -172,12 +207,41 @@ onMounted(async () => {
           />
         </label>
 
-        <pre v-if="prettyLookup">{{ prettyLookup }}</pre>
+        <div v-if="prettyLookup" class="result-box">
+          <pre>{{ prettyLookup }}</pre>
+        </div>
+      </article>
+
+      <article class="panel panel--action">
+        <div class="panel-head">
+          <h2>Lookup by content hash</h2>
+          <button :disabled="busy || !lookupDataItem.trim()" @click="lookupCurrentDataItem">
+            Find
+          </button>
+        </div>
+        <p class="panel-text">
+          Find records by the original content or metadata hash that was notarized.
+        </p>
+
+        <label>
+          <span>Content or metadata hash</span>
+          <textarea
+            v-model.trim="lookupDataItem"
+            rows="5"
+            placeholder="Paste a content or metadata hash here"
+          />
+        </label>
+
+        <div v-if="prettyLookupDataItem" class="result-box">
+          <pre>{{ prettyLookupDataItem }}</pre>
+        </div>
       </article>
     </section>
 
-    <p class="status" :data-busy="busy ? 'true' : 'false'">
-      {{ busy ? 'Working…' : (message || 'Ready.') }}
-    </p>
+    <footer class="status-bar">
+      <p class="status" :data-busy="busy ? 'true' : 'false'">
+        {{ busy ? 'Working…' : (message || 'Ready.') }}
+      </p>
+    </footer>
   </main>
 </template>

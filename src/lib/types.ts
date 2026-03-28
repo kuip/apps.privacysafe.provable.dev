@@ -1,6 +1,7 @@
 import type {
   ProveOptions,
   GetRecordResponse,
+  GetRecordByDataItemResponse,
   ProveSingleHashResponse,
 } from '@kuip/provable-sdk';
 
@@ -22,6 +23,11 @@ export interface LookupRecordRequest extends ServiceRequestBase {
   hash: string;
 }
 
+export interface LookupDataItemRequest extends ServiceRequestBase {
+  dataItem: string;
+  limit?: number;
+}
+
 export type RegisterHashResult = {
   request: RegisterHashRequest;
   response: ProveSingleHashResponse;
@@ -32,4 +38,10 @@ export type LookupRecordResult = {
   request: LookupRecordRequest;
   response: GetRecordResponse;
   recordUrl: string;
+};
+
+export type LookupDataItemResult = {
+  request: LookupDataItemRequest;
+  response: GetRecordByDataItemResponse;
+  recordUrls: string[];
 };

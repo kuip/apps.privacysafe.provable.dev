@@ -3,7 +3,7 @@
   "appDomain": "kayros.app.provable.dev",
   "icon": "logo.png",
   "description": "Kayros notarization and record lookup for PrivacySafe apps.",
-  "version": "0.1.8",
+  "version": "0.1.13",
   "components": {
     "/index.html": {
       "runtime": "web-gui",
@@ -15,6 +15,13 @@
         "appRPC": [
           "KayrosNotary"
         ],
+        "shell": {
+          "fsResource": {
+            "otherApps": {
+              "launcher.app.privacysafe.io": "ui-settings"
+            }
+          }
+        },
         "storage": {
           "appFS": "default"
         },
@@ -53,10 +60,10 @@
         "logToPlatform": true
       },
       "windowOpts": {
-        "width": 360,
-        "height": 140,
-        "minWidth": 360,
-        "minHeight": 140,
+        "width": 1,
+        "height": 1,
+        "minWidth": 1,
+        "minHeight": 1,
         "resizable": false,
         "minimizable": false,
         "maximizable": false,

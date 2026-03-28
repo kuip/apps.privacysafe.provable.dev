@@ -1,5 +1,7 @@
 import type {
   KayrosSettings,
+  LookupDataItemRequest,
+  LookupDataItemResult,
   LookupRecordRequest,
   LookupRecordResult,
   RegisterHashRequest,
@@ -10,6 +12,7 @@ import { KAYROS_SERVICE_NAME } from '@/lib/constants';
 import { decodeJson, encodeJson } from '@/lib/json-rpc';
 
 function updateStatus(message: string): void {
+  document.title = message;
   const el = document.querySelector('#service-status');
   if (el) {
     el.textContent = message;
@@ -128,6 +131,32 @@ class KayrosService {
       recordUrl: sdk.getRecordUrl(request.hash.trim(), resolved.dataType),
     };
   }
+
+  async lookupDataItem(request: LookupDataItemRequest): Promise<LookupDataItemResult> {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const sdk = await getProvableSdk();
+    sdk.setKayrosHost(resolved.kayrosHost);
+    const response = await sdk.get_record_by_data_item(
+      resolved.dataType,
+      request.dataItem.trim(),
+      {
+        apiKey: resolved.userKey || undefined,
+        limit: request.limit ?? 10,
+      },
+    );
+
+    return {
+      request: {
+        dataItem: request.dataItem.trim(),
+        limit: request.limit ?? 10,
+        kayrosHost: resolved.kayrosHost,
+        dataType: resolved.dataType,
+      },
+      response,
+      recordUrls: response.records.map(record => sdk.getRecordUrl(record.hash_item, resolved.dataType)),
+    };
+  }
 }
 
 const service = new KayrosService();
@@ -171,6 +200,15 @@ async function handleCall(
         callNum,
         callStatus: 'end',
         data: encodeJson(await service.lookupRecord(decodeJson<LookupRecordRequest>(data))),
+      });
+      return;
+    }
+
+    if (method === 'lookupDataItem') {
+      await connection.send({
+        callNum,
+        callStatus: 'end',
+        data: encodeJson(await service.lookupDataItem(decodeJson<LookupDataItemRequest>(data))),
       });
       return;
     }

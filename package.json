@@ -1,6 +1,6 @@
 {
   "name": "kayros.app.provable.dev",
-  "version": "0.1.8",
+  "version": "0.1.13",
   "description": "Kayros notarization app for PrivacySafe",
   "type": "module",
   "scripts": {
@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@kuip/provable-sdk": "^0.0.9",
-    "vue": "^3.5.31"
+    "@v1nt1248/3nclient-lib": "^0.2.64",
+    "vue": "3.5.24"
   },
   "devDependencies": {
     "@types/node": "^22.19.1",
