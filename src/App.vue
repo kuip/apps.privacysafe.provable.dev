@@ -109,7 +109,7 @@ onMounted(async () => {
           Register an existing content hash with Kayros and look records back up through the same RPC service that Storage can call later.
         </p>
       </div>
-      <img alt="Kayros" class="mark" src="/logo.svg" />
+      <img alt="Kayros" class="mark" src="/logo.png" />
     </section>
 
     <section class="panel">

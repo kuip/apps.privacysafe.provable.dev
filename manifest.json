@@ -1,7 +1,7 @@
 {
   "name": "Kayros",
   "appDomain": "kayros.app.provable.dev",
-  "icon": "logo.svg",
+  "icon": "logo.png",
   "description": "Kayros notarization and record lookup for PrivacySafe apps.",
   "version": "0.1.8",
   "components": {
@@ -68,7 +68,7 @@
   "launchers": [
     {
       "name": "Kayros",
-      "icon": "logo.svg",
+      "icon": "logo.png",
       "description": "Kayros notarization and record lookup for PrivacySafe apps.",
       "component": "/index.html",
       "formFactor": [
