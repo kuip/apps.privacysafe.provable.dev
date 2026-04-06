@@ -1,6 +1,6 @@
 {
   "name": "kayros.app.provable.dev",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Kayros notarization app for PrivacySafe",
   "type": "module",
   "scripts": {

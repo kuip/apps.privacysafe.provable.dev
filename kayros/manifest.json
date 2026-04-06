@@ -3,7 +3,7 @@
   "appDomain": "kayros.app.provable.dev",
   "icon": "logo.png",
   "description": "Kayros notarization and record lookup for PrivacySafe apps.",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "components": {
     "/index.html": {
       "runtime": "web-gui",
