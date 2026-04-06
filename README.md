@@ -1,35 +1,56 @@
-# Kayros PrivacySafe App
+# apps.privacysafe.provable.dev
 
-This repository scaffolds a PrivacySafe subapp for Kayros notarization.
+Shared repo for Provable PrivacySafe apps.
 
-It contains:
+This repository has two roles:
 
-- a launcher UI at `/index.html`
-- a web-gui service component at `/service.html`
-- an RPC service named `KayrosNotary`
+1. source tree for individual apps stored under subfolders, starting with `kayros/`
+2. GitHub Actions-built Pages artifact that serves app discovery files under the custom domain
 
-The UI talks to the service through `w3n.rpc.thisApp`, and other apps can talk to the same service through `w3n.rpc.otherAppsRPC` once they request the appropriate manifest capability.
+## Domain discovery
 
-## Local build
+Each app keeps its own app domain, but points at this shared host through a DNS TXT record.
+
+Example:
+
+- app domain: `kayros.app.provable.dev`
+- TXT record:
+  - `w3n-app=apps.privacysafe.provable.dev/kayros`
+
+PrivacySafe resolves the TXT record on the app domain, prepends `https://`, and then fetches the hosted discovery files from this repository's Pages site.
+
+## Current apps
+
+- `kayros/`
+
+## Local Pages build
+
+The live Pages site is built from app sources. It is not committed directly under `/kayros`, because that path is already used by the Kayros app source tree.
+
+To build the Pages artifact locally:
 
 ```bash
-npm install
-npm run build
+cd ./apps.privacysafe.provable.dev/kayros
+npm run pack:discovery
+
+cd ./apps.privacysafe.provable.dev
+node scripts/build-pages-site.mjs
 ```
 
-The installable pack is written to `app/`.
+This generates:
 
-## Current scope
+- `build/pages/index.html`
+- `build/pages/CNAME`
+- `build/pages/kayros/...`
 
-The service currently exposes:
+## Publish Kayros discovery files manually
 
-- `getSettings`
-- `saveSettings`
-- `registerHash`
-- `lookupRecord`
+```bash
+cd kayros
+npm run pack:discovery
 
-Settings are persisted in this app's local PrivacySafe storage as `settings.json`.
+cd ..
+node scripts/build-pages-site.mjs
+```
 
-## Important runtime note
-
-This prototype uses a web-gui service component instead of a Deno service component, because the current platform host starts Deno components without general outbound network access, which prevents direct calls to the Kayros API.
+This updates the hosted discovery tree under `./build/pages/kayros/`.

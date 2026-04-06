@@ -1,12 +1,13 @@
 {
   "name": "kayros.app.provable.dev",
-  "version": "0.1.13",
+  "version": "0.1.16",
   "description": "Kayros notarization app for PrivacySafe",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "pack": "node scripts/pack-app.mjs",
+    "pack:discovery": "node scripts/build-discovery-site.mjs",
     "serve": "vite preview"
   },
   "dependencies": {
