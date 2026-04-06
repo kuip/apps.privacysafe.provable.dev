@@ -25,10 +25,6 @@ PrivacySafe resolves the TXT record on the app domain, prepends `https://`, and 
 
 ## Local Pages build
 
-The live Pages site is built from app sources. It is not committed directly under `/kayros`, because that path is already used by the Kayros app source tree.
-
-To build the Pages artifact locally:
-
 ```bash
 cd ./apps.privacysafe.provable.dev/kayros
 npm run pack:discovery
@@ -42,6 +38,42 @@ This generates:
 - `build/pages/index.html`
 - `build/pages/CNAME`
 - `build/pages/kayros/...`
+
+## Release model
+
+The hosted discovery tree is versioned, for example:
+
+- `/kayros/0.1.16/list`
+- `/kayros/0.1.16/unpacked/...`
+
+Current workflow intent:
+
+- push to `main`: validate/build only
+- tag like `v0.1.17`: publish Pages and create release assets
+
+Recommended release flow:
+
+```bash
+cd ./apps.privacysafe.provable.dev
+make kayros
+```
+
+This command will:
+
+- print the current Kayros version
+- ask for the next version
+- update `kayros/package.json` and `kayros/manifest.json`
+- build the local release artifacts
+- commit the version bump
+- create a `vX.Y.Z` tag
+- push the branch and tag
+
+Then GitHub Actions will:
+
+- build Kayros
+- generate the discovery site
+- deploy Pages
+- attach the install zip and discovery archive to the GitHub release
 
 ## Publish Kayros discovery files manually
 
