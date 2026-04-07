@@ -3,7 +3,7 @@
   "appDomain": "kayros.app.provable.dev",
   "icon": "logo.png",
   "description": "Kayros cryptographic integrity proofs and record lookup for PrivacySafe apps.",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "components": {
     "/index.html": {
       "runtime": "web-gui",
