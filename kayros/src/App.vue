@@ -127,7 +127,7 @@ onMounted(async () => {
   <main class="shell">
     <section class="hero">
       <div class="hero-copy">
-        <h1>Kayros Notary</h1>
+        <h1>Kayros Cryptographic Integrity Proofs</h1>
       </div>
       <img alt="Kayros" class="mark" src="/logo.png" />
     </section>
@@ -138,7 +138,7 @@ onMounted(async () => {
         <button :disabled="busy" @click="saveSettings">Save</button>
       </div>
       <p class="panel-text">
-        These values are used by the Kayros RPC service when Storage requests upload-time notarization.
+        These values are used by the Kayros RPC service when Storage requests upload-time registration.
       </p>
 
       <label>

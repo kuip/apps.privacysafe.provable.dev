@@ -1,6 +1,6 @@
 # Kayros PrivacySafe App
 
-This repository scaffolds a PrivacySafe subapp for Kayros notarization.
+This repository scaffolds a PrivacySafe subapp for Kayros cryptographic integrity proofs for files and data.
 
 It contains:
 
