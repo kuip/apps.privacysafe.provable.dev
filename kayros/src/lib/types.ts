@@ -28,10 +28,62 @@ export interface LookupDataItemRequest extends ServiceRequestBase {
   limit?: number;
 }
 
+export interface UploadedFileMetadata {
+  storageFileId: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  lastModified: number;
+  uploadedAt: string;
+}
+
+export interface NotarizeStoredFileRequest {
+  fullFilePath: string;
+  metadataPayload: UploadedFileMetadata;
+}
+
 export type RegisterHashResult = {
   request: RegisterHashRequest;
   response: ProveSingleHashResponse;
   recordUrl?: string;
+};
+
+export type KayrosNotaryStatus = 'registered' | 'failed';
+export type KayrosUploadStatus = 'registered' | 'partial' | 'failed';
+
+export interface KayrosNotaryEntry {
+  label: 'content' | 'metadata';
+  status: KayrosNotaryStatus;
+  algorithm: 'SHA-256';
+  hash: string;
+  request?: {
+    hash: string;
+    kayrosHost?: string;
+    dataType?: string;
+  };
+  response?: {
+    success: boolean;
+    hash?: string;
+    timeuuid?: string;
+    encoding?: string;
+    error?: string;
+  };
+  recordUrl?: string;
+  error?: string;
+}
+
+export interface KayrosUploadProof {
+  version: 1;
+  status: KayrosUploadStatus;
+  uploadedAt: string;
+  metadataPayload: UploadedFileMetadata;
+  content: KayrosNotaryEntry;
+  metadata: KayrosNotaryEntry;
+}
+
+export type NotarizeStoredFileResult = {
+  status: KayrosUploadStatus;
+  proofWritten: boolean;
 };
 
 export type LookupRecordResult = {

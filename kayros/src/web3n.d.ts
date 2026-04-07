@@ -75,8 +75,21 @@ declare namespace web3n.files {
   }
 
   interface ReadonlyFile {
+    name: string;
+    readBytes(start?: number, end?: number): Promise<Uint8Array | undefined>;
     readJSON<T>(): Promise<T>;
     watch?(obs: web3n.rpc.Observer<FileChangeEvent>): (() => void) | void;
+  }
+
+  interface WritableFile extends ReadonlyFile {
+    updateXAttrs(changes: {
+      set?: Record<string, unknown>;
+      remove?: string[];
+    }): Promise<void>;
+  }
+
+  interface WritableFS {
+    writeJSONFile(path: string, json: unknown): Promise<void>;
   }
 }
 

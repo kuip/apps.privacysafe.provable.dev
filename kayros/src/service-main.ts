@@ -1,9 +1,14 @@
 import type {
   KayrosSettings,
+  KayrosNotaryEntry,
+  KayrosUploadProof,
+  KayrosUploadStatus,
   LookupDataItemRequest,
   LookupDataItemResult,
   LookupRecordRequest,
   LookupRecordResult,
+  NotarizeStoredFileRequest,
+  NotarizeStoredFileResult,
   RegisterHashRequest,
   RegisterHashResult,
 } from '@/lib/types';
@@ -48,6 +53,114 @@ function formatError(err: unknown): string {
   }
 }
 
+const KAYROS_NOTARY_XATTR_NAME = 'kayros-notary-v1';
+const SHA256_ALGORITHM = 'SHA-256';
+const KAYROS_REGISTER_RETRIES = 3;
+const KAYROS_REGISTER_RETRY_DELAY_MS = 200;
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${stableSerialize(nested)}`);
+    return `{${entries.join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map(byte => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function createSha256Hex(bytes: Uint8Array): Promise<string> {
+  const input = bytes.slice().buffer as ArrayBuffer;
+  const digest = await crypto.subtle.digest('SHA-256', input);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function ensureKayrosRegistrationSucceeded(result: RegisterHashResult): RegisterHashResult {
+  if (result.response.success && !result.response.error) {
+    return result;
+  }
+
+  throw new Error(result.response.error || 'Kayros rejected the registration request.');
+}
+
+function buildSuccessEntry(
+  label: KayrosNotaryEntry['label'],
+  hash: string,
+  result: RegisterHashResult,
+): KayrosNotaryEntry {
+  return {
+    label,
+    status: 'registered',
+    algorithm: SHA256_ALGORITHM,
+    hash,
+    request: result.request,
+    response: result.response,
+    recordUrl: result.recordUrl,
+  };
+}
+
+function buildFailedEntry(
+  label: KayrosNotaryEntry['label'],
+  hash: string,
+  err: unknown,
+): KayrosNotaryEntry {
+  return {
+    label,
+    status: 'failed',
+    algorithm: SHA256_ALGORITHM,
+    hash,
+    error: formatError(err),
+  };
+}
+
+function resolveOverallStatus(
+  content: KayrosNotaryEntry,
+  metadata: KayrosNotaryEntry,
+): KayrosUploadStatus {
+  if (content.status === 'registered' && metadata.status === 'registered') {
+    return 'registered';
+  }
+
+  if (content.status === 'failed' && metadata.status === 'failed') {
+    return 'failed';
+  }
+
+  return 'partial';
+}
+
+function getFolderPath(fullFilePath: string): string {
+  const pathParts = fullFilePath.split('/');
+  pathParts.pop();
+  return pathParts.join('/') || '';
+}
+
+function buildSidecarFileName(originalName: string, kayrosHash: string): string {
+  return `${originalName}_${kayrosHash}.json`;
+}
+
+function buildSidecarFilePath(fullFilePath: string, kayrosHash: string): string {
+  const folderPath = getFolderPath(fullFilePath);
+  const originalName = fullFilePath.split('/').pop() || 'file';
+  const sidecarName = buildSidecarFileName(originalName, kayrosHash);
+  return folderPath ? `${folderPath}/${sidecarName}` : sidecarName;
+}
+
 async function reportServiceError(context: string, err: unknown): Promise<void> {
   const detail = formatError(err);
   updateStatus(`Kayros service failed: ${detail}`);
@@ -90,7 +203,7 @@ class KayrosService {
     return await writeSettings(settings);
   }
 
-  async registerHash(request: RegisterHashRequest): Promise<RegisterHashResult> {
+  private async registerHashOnce(request: RegisterHashRequest): Promise<RegisterHashResult> {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
     const sdk = await getProvableSdk();
@@ -109,6 +222,26 @@ class KayrosService {
       response,
       recordUrl: response.hash ? sdk.getRecordUrl(response.hash, resolved.dataType) : undefined,
     };
+  }
+
+  async registerHash(request: RegisterHashRequest): Promise<RegisterHashResult> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= KAYROS_REGISTER_RETRIES; attempt += 1) {
+      try {
+        const result = await this.registerHashOnce(request);
+        return ensureKayrosRegistrationSucceeded(result);
+      } catch (err) {
+        lastError = err;
+        if (attempt < KAYROS_REGISTER_RETRIES) {
+          await sleep(KAYROS_REGISTER_RETRY_DELAY_MS);
+        }
+      }
+    }
+
+    throw (lastError instanceof Error)
+      ? lastError
+      : new Error('Kayros registration failed after retries.');
   }
 
   async lookupRecord(request: LookupRecordRequest): Promise<LookupRecordResult> {
@@ -157,6 +290,73 @@ class KayrosService {
       recordUrls: response.records.map(record => sdk.getRecordUrl(record.hash_item, resolved.dataType)),
     };
   }
+
+  async notarizeStoredFile(
+    request: NotarizeStoredFileRequest,
+    file: web3n.files.WritableFile,
+    fs: web3n.files.WritableFS,
+  ): Promise<NotarizeStoredFileResult> {
+    const fileBytes = await file.readBytes();
+    if (!fileBytes) {
+      throw new Error('Stored file is empty or unreadable.');
+    }
+
+    const [contentHash, metadataHash] = await Promise.all([
+      createSha256Hex(fileBytes),
+      createSha256Hex(new TextEncoder().encode(stableSerialize(request.metadataPayload))),
+    ]);
+
+    const [contentResult, metadataResult] = await Promise.allSettled([
+      this.registerHash({ hash: contentHash }),
+      this.registerHash({ hash: metadataHash }),
+    ]);
+
+    const content = contentResult.status === 'fulfilled'
+      ? buildSuccessEntry('content', contentHash, contentResult.value)
+      : buildFailedEntry('content', contentHash, contentResult.reason);
+
+    const metadata = metadataResult.status === 'fulfilled'
+      ? buildSuccessEntry('metadata', metadataHash, metadataResult.value)
+      : buildFailedEntry('metadata', metadataHash, metadataResult.reason);
+
+    const proof: KayrosUploadProof = {
+      version: 1,
+      status: resolveOverallStatus(content, metadata),
+      uploadedAt: request.metadataPayload.uploadedAt,
+      metadataPayload: request.metadataPayload,
+      content,
+      metadata,
+    };
+
+    if (proof.status !== 'registered') {
+      const detail = {
+        file: file.name,
+        fullFilePath: request.fullFilePath,
+        proof,
+      };
+      console.warn('Skipping Kayros proof persistence because registration did not fully succeed.', detail);
+      await getW3N()?.log?.('error', 'Skipping Kayros proof persistence because registration did not fully succeed.', detail);
+      return {
+        status: proof.status,
+        proofWritten: false,
+      };
+    }
+
+    await file.updateXAttrs({
+      set: {
+        [KAYROS_NOTARY_XATTR_NAME]: proof,
+      },
+    });
+
+    const sidecarHash = proof.content.response?.hash || proof.content.hash;
+    const sidecarPath = buildSidecarFilePath(request.fullFilePath, sidecarHash);
+    await fs.writeJSONFile(sidecarPath, proof);
+
+    return {
+      status: proof.status,
+      proofWritten: true,
+    };
+  }
 }
 
 const service = new KayrosService();
@@ -191,6 +391,25 @@ async function handleCall(
         callNum,
         callStatus: 'end',
         data: encodeJson(await service.registerHash(decodeJson<RegisterHashRequest>(data))),
+      });
+      return;
+    }
+
+    if (method === 'notarizeStoredFile') {
+      const request = decodeJson<NotarizeStoredFileRequest>(data);
+      const file = data?.passedByReference?.[0] as web3n.files.WritableFile | undefined;
+      const fs = data?.passedByReference?.[1] as web3n.files.WritableFS | undefined;
+      if (!file || !fs) {
+        throw new Error('Kayros notarizeStoredFile requires passed file and fs references.');
+      }
+      const result = await service.notarizeStoredFile(request, file, fs);
+      await connection.send({
+        callNum,
+        callStatus: 'end',
+        data: {
+          ...encodeJson(result),
+          passedByReference: [file],
+        },
       });
       return;
     }
