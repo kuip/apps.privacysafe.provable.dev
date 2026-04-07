@@ -191,11 +191,11 @@ onMounted(async () => {
           </button>
         </div>
         <p class="panel-text">
-          Load a previously registered record from Kayros using the same hash value.
+          Load a previously registered record from Kayros by record hash.
         </p>
 
         <label>
-          <span>Kayros record hash</span>
+          <span>Kayros record hash (hash_item)</span>
           <textarea
             v-model.trim="lookupHash"
             rows="5"
@@ -210,7 +210,7 @@ onMounted(async () => {
 
       <article class="panel panel--action">
         <div class="panel-head">
-          <h2>Lookup by content hash</h2>
+          <h2>Lookup by data hash</h2>
           <button :disabled="busy || !lookupDataItem.trim()" @click="lookupCurrentDataItem">
             Find
           </button>
@@ -220,7 +220,7 @@ onMounted(async () => {
         </p>
 
         <label>
-          <span>Content or metadata hash</span>
+          <span>Content or metadata hash (data_item)</span>
           <textarea
             v-model.trim="lookupDataItem"
             rows="5"

@@ -53,7 +53,6 @@ function formatError(err: unknown): string {
   }
 }
 
-const KAYROS_NOTARY_XATTR_NAME = 'kayros-notary-v1';
 const SHA256_ALGORITHM = 'SHA-256';
 const KAYROS_REGISTER_RETRIES = 3;
 const KAYROS_REGISTER_RETRY_DELAY_MS = 200;
@@ -159,6 +158,21 @@ function buildSidecarFilePath(fullFilePath: string, kayrosHash: string): string 
   const originalName = fullFilePath.split('/').pop() || 'file';
   const sidecarName = buildSidecarFileName(originalName, kayrosHash);
   return folderPath ? `${folderPath}/${sidecarName}` : sidecarName;
+}
+
+function buildKayrosXAttrs(proof: KayrosUploadProof): Record<string, unknown> {
+  return {
+    kayros_version: proof.version,
+    kayros_data_type: proof.content.request?.dataType || proof.metadata.request?.dataType || '',
+    kayros_hash_item: {
+      content: proof.content.response?.hash || '',
+      metadata: proof.metadata.response?.hash || '',
+    },
+    kayros_data_item: {
+      content: proof.content.hash,
+      metadata: proof.metadata.hash,
+    },
+  };
 }
 
 async function reportServiceError(context: string, err: unknown): Promise<void> {
@@ -343,9 +357,7 @@ class KayrosService {
     }
 
     await file.updateXAttrs({
-      set: {
-        [KAYROS_NOTARY_XATTR_NAME]: proof,
-      },
+      set: buildKayrosXAttrs(proof),
     });
 
     const sidecarHash = proof.content.response?.hash || proof.content.hash;
