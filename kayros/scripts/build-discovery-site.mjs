@@ -54,6 +54,24 @@ async function ensureBuild(skipBuild) {
   return distDir;
 }
 
+async function ensureZipArtifact(version) {
+  const zipName = `kayros.app.provable.dev-${version}.zip`;
+  const zipPath = join(projectDir, 'build', zipName);
+
+  if (!(await exists(zipPath))) {
+    execFileSync('node', ['scripts/pack-app.mjs', '--skip-build'], {
+      cwd: projectDir,
+      stdio: 'inherit',
+    });
+  }
+
+  if (!(await exists(zipPath))) {
+    fail(`Pack artifact not found: ${zipPath}`);
+  }
+
+  return { zipName, zipPath };
+}
+
 async function resolveIconSource(iconName) {
   const candidates = [
     join(projectDir, iconName),
@@ -128,6 +146,7 @@ async function main() {
   }
 
   const distDir = await ensureBuild(skipBuild);
+  const { zipName, zipPath } = await ensureZipArtifact(version);
   const versionDir = join(outDir, version);
   const unpackedDir = join(versionDir, UNPACKED_DIR_NAME);
   const appDir = join(unpackedDir, 'app');
@@ -153,8 +172,16 @@ async function main() {
     'utf8',
   );
 
+  const zipBytes = await readFile(zipPath);
+  await cp(zipPath, join(versionDir, zipName));
+
   const versionList = {
     files: {
+      [zipName]: {
+        content: 'bin/zip',
+        sha512: sha512Base64(zipBytes),
+        size: zipBytes.byteLength,
+      },
       [UNPACKED_DIR_NAME]: {
         content: 'bin/unpacked',
         sha512: '',
