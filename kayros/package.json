@@ -1,6 +1,6 @@
 {
   "name": "kayros.app.provable.dev",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "Kayros cryptographic integrity app for PrivacySafe files and data",
   "type": "module",
   "scripts": {
