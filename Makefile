@@ -1,7 +1,7 @@
-.PHONY: kayros publish:kayros
+.PHONY: kayros publish-kayros
 
 kayros:
-	@echo "Use 'make publish:kayros' to release Kayros."
+	@echo "Use 'make publish-kayros' to release Kayros."
 
-publish:kayros:
+publish-kayros:
 	./scripts/release-kayros.sh
