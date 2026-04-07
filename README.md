@@ -55,7 +55,7 @@ Recommended release flow:
 
 ```bash
 cd ./apps.privacysafe.provable.dev
-make kayros
+make publish:kayros
 ```
 
 This command will:
