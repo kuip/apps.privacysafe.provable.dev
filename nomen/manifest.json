@@ -1,0 +1,48 @@
+{
+  "name": "Nomen",
+  "appDomain": "nomen.app.provable.dev",
+  "icon": "logo.png",
+  "description": "Sign Nomen link and sign-in challenges with your current PrivacySafe identity.",
+  "version": "0.1.0",
+  "components": {
+    "/index.html": {
+      "runtime": "web-gui",
+      "startedBy": "user",
+      "formFactor": [
+        "desktop",
+        "tablet"
+      ],
+      "capsRequested": {
+        "mailerid": true,
+        "shell": {
+          "openDashboard": true,
+          "openURL": [
+            {
+              "schema": "https",
+              "domain": "nomen.provable.dev"
+            }
+          ]
+        },
+        "logToPlatform": true
+      },
+      "windowOpts": {
+        "width": 980,
+        "height": 740,
+        "minWidth": 860,
+        "minHeight": 640
+      }
+    }
+  },
+  "launchers": [
+    {
+      "name": "Nomen",
+      "icon": "logo.png",
+      "description": "Sign Nomen link and sign-in challenges with your current PrivacySafe identity.",
+      "component": "/index.html",
+      "formFactor": [
+        "desktop",
+        "tablet"
+      ]
+    }
+  ]
+}

@@ -1,10 +1,10 @@
-name: Release Kayros
+name: Release Nomen
 
 on:
   workflow_dispatch:
   push:
     tags:
-      - 'kayros-v*'
+      - 'nomen-v*'
 
 permissions:
   contents: write
@@ -19,33 +19,33 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: kayros/package-lock.json
+          cache-dependency-path: nomen/package-lock.json
 
       - run: npm ci
-        working-directory: kayros
+        working-directory: nomen
 
       - run: npm run pack
-        working-directory: kayros
+        working-directory: nomen
       - run: npm run pack:discovery
-        working-directory: kayros
+        working-directory: nomen
 
       - run: node scripts/build-pages-site.mjs
 
       - name: Archive discovery site
-        run: tar -C build -czf kayros/build/kayros.app.provable.dev-discovery-${{ github.ref_name || 'manual' }}.tar.gz pages
+        run: tar -C build -czf nomen/build/nomen.app.provable.dev-discovery-${{ github.ref_name || 'manual' }}.tar.gz pages
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kayros-build-assets
+          name: nomen-build-assets
           path: |
-            kayros/build/*.zip
-            kayros/build/*.tar.gz
+            nomen/build/*.zip
+            nomen/build/*.tar.gz
 
       - name: Publish release assets
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            kayros/build/*.zip
-            kayros/build/*.tar.gz
+            nomen/build/*.zip
+            nomen/build/*.tar.gz

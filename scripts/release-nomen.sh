@@ -3,9 +3,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-KAYROS_DIR="$ROOT_DIR/kayros"
-PACKAGE_JSON="$KAYROS_DIR/package.json"
-MANIFEST_JSON="$KAYROS_DIR/manifest.json"
+NOMEN_DIR="$ROOT_DIR/nomen"
+PACKAGE_JSON="$NOMEN_DIR/package.json"
+MANIFEST_JSON="$NOMEN_DIR/manifest.json"
 
 read_json_version() {
   local file="$1"
@@ -51,7 +51,7 @@ current_package_version="$(read_json_version "$PACKAGE_JSON")"
 current_manifest_version="$(read_json_version "$MANIFEST_JSON")"
 
 if [[ -z "$current_package_version" || -z "$current_manifest_version" ]]; then
-  echo "Failed to read current version from kayros package/manifest."
+  echo "Failed to read current version from nomen package/manifest."
   exit 1
 fi
 
@@ -65,8 +65,8 @@ fi
 require_clean_git_tree
 current_branch="$(require_current_branch)"
 
-echo "Current Kayros version: $current_package_version"
-printf "Next Kayros version: "
+echo "Current Nomen version: $current_package_version"
+printf "Next Nomen version: "
 read -r next_version
 
 if [[ -z "$next_version" ]]; then
@@ -81,7 +81,7 @@ if [[ "$next_version" == "$current_package_version" ]]; then
   exit 1
 fi
 
-tag_name="kayros-v$next_version"
+tag_name="nomen-v$next_version"
 if git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/$tag_name" >/dev/null; then
   echo "Tag $tag_name already exists."
   exit 1
@@ -90,18 +90,18 @@ fi
 replace_version "$PACKAGE_JSON" "$current_package_version" "$next_version"
 replace_version "$MANIFEST_JSON" "$current_manifest_version" "$next_version"
 
-echo "Building Kayros release artifacts..."
-(cd "$KAYROS_DIR" && npm run pack)
-(cd "$KAYROS_DIR" && npm run pack:discovery)
+echo "Building Nomen release artifacts..."
+(cd "$NOMEN_DIR" && npm run pack)
+(cd "$NOMEN_DIR" && npm run pack:discovery)
 (cd "$ROOT_DIR" && node scripts/build-pages-site.mjs)
 
 git -C "$ROOT_DIR" add \
-  "kayros/package.json" \
-  "kayros/manifest.json"
+  "nomen/package.json" \
+  "nomen/manifest.json"
 
-git -C "$ROOT_DIR" commit -m "release(kayros): v$next_version"
+git -C "$ROOT_DIR" commit -m "release(nomen): v$next_version"
 git -C "$ROOT_DIR" tag "$tag_name"
 git -C "$ROOT_DIR" push origin "$current_branch"
 git -C "$ROOT_DIR" push origin "$tag_name"
 
-echo "Published Kayros v$next_version"
+echo "Published Nomen v$next_version"

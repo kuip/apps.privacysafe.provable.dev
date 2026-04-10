@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,7 +22,41 @@ async function exists(path) {
   }
 }
 
-function landingHtml() {
+async function listAppEntries() {
+  const entries = await readdir(repoDir, { withFileTypes: true });
+  const apps = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const appDir = join(repoDir, entry.name);
+    const manifestPath = join(appDir, 'manifest.json');
+    const discoveryDir = join(appDir, 'build', 'discovery');
+    if (!(await exists(manifestPath)) || !(await exists(discoveryDir))) {
+      continue;
+    }
+
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    apps.push({
+      slug: entry.name,
+      name: manifest.name || entry.name,
+      appDomain: manifest.appDomain || '',
+      discoveryDir,
+    });
+  }
+
+  return apps.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+function landingHtml(apps) {
+  const cards = apps.map(({ name, slug, appDomain }) => `        <a class="card" href="./${slug}/">
+          <div class="name">${escapeHtml(name)}</div>
+          <div class="path">/${escapeHtml(slug)}</div>
+          <div class="meta">${escapeHtml(appDomain)}</div>
+        </a>`).join('\n');
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -67,6 +101,11 @@ function landingHtml() {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         color: var(--accent);
       }
+      .meta {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 14px;
+      }
     </style>
   </head>
   <body>
@@ -75,10 +114,7 @@ function landingHtml() {
       <p>Static discovery host for PrivacySafe apps distributed by Provable.</p>
       <p>Each app is published under its own path and referenced from its app domain via a <code>w3n-app=...</code> DNS TXT record.</p>
       <section class="grid">
-        <a class="card" href="./kayros/channels">
-          <div class="name">Kayros</div>
-          <div class="path">/kayros</div>
-        </a>
+${cards}
       </section>
     </main>
   </body>
@@ -173,7 +209,7 @@ ${items}
 `;
 }
 
-async function generateBrowseIndexes(rootDir, currentDir = rootDir) {
+async function generateBrowseIndexes(rootDir, titlePrefix, currentDir = rootDir) {
   const entries = await readdir(currentDir, { withFileTypes: true });
   const relDir = relative(rootDir, currentDir).split('\\').join('/');
   const currentPath = relDir ? `/${relDir}` : '/';
@@ -190,7 +226,7 @@ async function generateBrowseIndexes(rootDir, currentDir = rootDir) {
 
     if (entry.isDirectory()) {
       const childDir = join(currentDir, entry.name);
-      await generateBrowseIndexes(rootDir, childDir);
+      await generateBrowseIndexes(rootDir, titlePrefix, childDir);
       browseEntries.push({
         name: `${entry.name}/`,
         href: `./${entry.name}/`,
@@ -214,23 +250,28 @@ async function generateBrowseIndexes(rootDir, currentDir = rootDir) {
     return a.name.localeCompare(b.name);
   });
 
-  const title = currentDir === rootDir ? 'Kayros Distribution' : `Kayros Distribution ${currentPath}`;
+  const title = currentDir === rootDir ? `${titlePrefix} Distribution` : `${titlePrefix} Distribution ${currentPath}`;
   await writeFile(join(currentDir, 'index.html'), browseHtml(title, currentPath, browseEntries), 'utf8');
 }
 
 async function main() {
-  const kayrosDiscovery = join(repoDir, 'kayros', 'build', 'discovery');
-  if (!(await exists(kayrosDiscovery))) {
-    fail(`Kayros discovery output not found: ${kayrosDiscovery}. Run "npm run pack:discovery" in kayros/ first.`);
+  const apps = await listAppEntries();
+  if (apps.length === 0) {
+    fail('No app discovery outputs were found. Run "npm run pack:discovery" in at least one app folder first.');
   }
 
   await rm(buildDir, { recursive: true, force: true });
   await mkdir(buildDir, { recursive: true });
-  await cp(kayrosDiscovery, join(buildDir, 'kayros'), { recursive: true });
-  await generateBrowseIndexes(join(buildDir, 'kayros'));
+
+  for (const app of apps) {
+    const targetDir = join(buildDir, app.slug);
+    await cp(app.discoveryDir, targetDir, { recursive: true });
+    await generateBrowseIndexes(targetDir, app.name);
+  }
+
   await writeFile(join(buildDir, 'CNAME'), 'apps.privacysafe.provable.dev\n', 'utf8');
   await writeFile(join(buildDir, '.nojekyll'), '\n', 'utf8');
-  await writeFile(join(buildDir, 'index.html'), landingHtml(), 'utf8');
+  await writeFile(join(buildDir, 'index.html'), landingHtml(apps), 'utf8');
 
   console.log(`Pages site generated at ${buildDir}`);
 }

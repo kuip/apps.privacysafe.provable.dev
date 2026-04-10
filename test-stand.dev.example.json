@@ -1,0 +1,28 @@
+{
+  "apps": {
+    "nomen.app.provable.dev": {
+      "dir": "nomen",
+      "url": "http://127.0.0.1:5174",
+      "launchComponent": "/index.html"
+    },
+    "kayros.app.provable.dev": {
+      "dir": "kayros",
+      "url": "http://127.0.0.1:5175",
+      "launchComponent": "/index.html"
+    }
+  },
+  "startupApp": {
+    "domain": "startup.app.privacysafe.io",
+    "dir": "../startup.app.privacysafe.io",
+    "url": "http://127.0.0.1:3030"
+  },
+  "users": [
+    {
+      "idTemplate": "provable startup %d @privacysafe.dev",
+      "testStartup": true
+    },
+    {
+      "idTemplate": "provable dev %d @privacysafe.dev"
+    }
+  ]
+}

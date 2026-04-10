@@ -4,7 +4,7 @@ Shared repo for Provable PrivacySafe apps.
 
 This repository has two roles:
 
-1. source tree for individual apps stored under subfolders, starting with `kayros/`
+1. source tree for individual apps stored under subfolders
 2. GitHub Actions-built Pages artifact that serves app discovery files under the custom domain
 
 ## Domain discovery
@@ -22,11 +22,15 @@ PrivacySafe resolves the TXT record on the app domain, prepends `https://`, and 
 ## Current apps
 
 - `kayros/`
+- `nomen/`
 
 ## Local Pages build
 
 ```bash
 cd ./apps.privacysafe.provable.dev/kayros
+npm run pack:discovery
+
+cd ./apps.privacysafe.provable.dev/nomen
 npm run pack:discovery
 
 cd ./apps.privacysafe.provable.dev
@@ -38,6 +42,7 @@ This generates:
 - `build/pages/index.html`
 - `build/pages/CNAME`
 - `build/pages/kayros/...`
+- `build/pages/nomen/...`
 
 ## Release model
 
@@ -49,31 +54,38 @@ The hosted discovery tree is versioned, for example:
 Current workflow intent:
 
 - push to `main`: validate/build only
-- tag like `v0.1.17`: publish Pages and create release assets
+- tag like `kayros-v0.1.17`: publish Pages and create Kayros release assets
+- tag like `nomen-v0.1.1`: publish Pages and create Nomen release assets
 
 Recommended release flow:
 
 ```bash
 cd ./apps.privacysafe.provable.dev
-make publish:kayros
+make publish-kayros
+make publish-nomen
 ```
 
-This command will:
+These commands will:
 
-- print the current Kayros version
+- print the current app version
 - ask for the next version
-- update `kayros/package.json` and `kayros/manifest.json`
+- update that app's `package.json` and `manifest.json`
 - build the local release artifacts
 - commit the version bump
-- create a `vX.Y.Z` tag
+- create an app-specific release tag
 - push the branch and tag
 
 Then GitHub Actions will:
 
-- build Kayros
+- build the released app
 - generate the discovery site
 - deploy Pages
 - attach the install zip and discovery archive to the GitHub release
+
+Tag conventions:
+
+- Kayros: `kayros-vX.Y.Z`
+- Nomen: `nomen-vX.Y.Z`
 
 ## Publish Kayros discovery files manually
 

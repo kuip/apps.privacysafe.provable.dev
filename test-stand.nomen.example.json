@@ -1,0 +1,23 @@
+{
+  "apps": {
+    "nomen.app.provable.dev": {
+      "dir": "nomen",
+      "url": "http://127.0.0.1:5174",
+      "launchComponent": "/index.html"
+    }
+  },
+  "startupApp": {
+    "domain": "startup.app.privacysafe.io",
+    "dir": "../startup.app.privacysafe.io",
+    "url": "http://127.0.0.1:3030"
+  },
+  "users": [
+    {
+      "idTemplate": "nomen startup %d @privacysafe.dev",
+      "testStartup": true
+    },
+    {
+      "idTemplate": "nomen dev %d @privacysafe.dev"
+    }
+  ]
+}

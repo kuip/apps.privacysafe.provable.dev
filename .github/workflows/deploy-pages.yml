@@ -3,7 +3,8 @@ name: Deploy Pages
 on:
   push:
     tags:
-      - 'v*'
+      - 'kayros-v*'
+      - 'nomen-v*'
   workflow_dispatch:
 
 permissions:
@@ -27,11 +28,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: kayros/package-lock.json
+          cache-dependency-path: |
+            kayros/package-lock.json
+            nomen/package-lock.json
       - run: npm ci
         working-directory: kayros
+      - run: npm ci
+        working-directory: nomen
       - run: npm run pack:discovery
         working-directory: kayros
+      - run: npm run pack:discovery
+        working-directory: nomen
       - run: node scripts/build-pages-site.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
