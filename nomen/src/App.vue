@@ -29,6 +29,7 @@ const successMessage = ref('');
 const proofJson = ref('');
 const isSigning = ref(false);
 const isCopying = ref(false);
+const proofOutput = ref<HTMLTextAreaElement | null>(null);
 
 const canSign = computed(() => (
   !isSigning.value &&
@@ -119,10 +120,36 @@ async function copyProof() {
 
   try {
     isCopying.value = true;
-    await navigator.clipboard.writeText(proofJson.value);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(proofJson.value);
+    } else {
+      throw new Error('Clipboard API unavailable.');
+    }
     successMessage.value = 'Signed proof copied to clipboard.';
   } catch (err) {
-    errorMessage.value = err instanceof Error ? err.message : 'Copy to clipboard failed.';
+    try {
+      if (!proofOutput.value) {
+        throw err;
+      }
+
+      proofOutput.value.focus();
+      proofOutput.value.select();
+      proofOutput.value.setSelectionRange(0, proofJson.value.length);
+      const copied = document.execCommand('copy');
+      proofOutput.value.setSelectionRange(0, 0);
+      proofOutput.value.blur();
+
+      if (!copied) {
+        throw err;
+      }
+
+      successMessage.value = 'Signed proof copied to clipboard.';
+      errorMessage.value = '';
+    } catch (fallbackErr) {
+      errorMessage.value = fallbackErr instanceof Error
+        ? fallbackErr.message
+        : 'Copy to clipboard failed.';
+    }
   } finally {
     isCopying.value = false;
   }
@@ -158,7 +185,6 @@ onMounted(async () => {
         <span class="brand__name">Nomen</span>
       </button>
       <div class="meta">
-        <div class="meta__label">PrivacySafe identity</div>
         <div class="meta__value">{{ userId || 'Unavailable' }}</div>
         <div v-if="appVersion" class="meta__version">v{{ appVersion }}</div>
       </div>
@@ -182,7 +208,11 @@ onMounted(async () => {
         <section class="panel panel--form">
           <div class="panel__header">
             <h2>Nomen challenge</h2>
-            <span class="panel__hint">JSON object from Nomen</span>
+            <div class="panel__header-actions">
+              <button class="btn btn--primary" :disabled="!canSign" type="button" @click="signChallenge">
+                {{ isSigning ? 'Signing…' : 'Sign challenge' }}
+              </button>
+            </div>
           </div>
           <textarea
             v-model="challengeInput"
@@ -190,11 +220,6 @@ onMounted(async () => {
             spellcheck="false"
             autocomplete="off"
           />
-          <div class="actions">
-            <button class="btn btn--primary" :disabled="!canSign" type="button" @click="signChallenge">
-              {{ isSigning ? 'Signing…' : 'Sign challenge' }}
-            </button>
-          </div>
           <p v-if="errorMessage" class="notice notice--error">{{ errorMessage }}</p>
           <p v-if="successMessage" class="notice notice--success">{{ successMessage }}</p>
         </section>
@@ -202,14 +227,19 @@ onMounted(async () => {
         <section class="panel panel--result">
           <div class="panel__header">
             <h2>Signed proof bundle</h2>
-            <span class="panel__hint">Paste back into Nomen</span>
+            <div class="panel__header-actions">
+              <button class="btn" :disabled="!proofJson || isCopying" type="button" @click="copyProof">
+                {{ isCopying ? 'Copying…' : 'Copy JSON' }}
+              </button>
+            </div>
           </div>
-          <pre class="result">{{ proofJson || 'No signed proof yet.' }}</pre>
-          <div class="actions">
-            <button class="btn" :disabled="!proofJson || isCopying" type="button" @click="copyProof">
-              {{ isCopying ? 'Copying…' : 'Copy JSON' }}
-            </button>
-          </div>
+          <textarea
+            ref="proofOutput"
+            class="editor editor--result"
+            :value="proofJson || 'No signed proof yet.'"
+            readonly
+            spellcheck="false"
+          />
         </section>
       </section>
     </main>

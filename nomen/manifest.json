@@ -15,6 +15,11 @@
       "capsRequested": {
         "mailerid": true,
         "shell": {
+          "fsResource": {
+            "otherApps": {
+              "launcher.app.privacysafe.io": "ui-settings"
+            }
+          },
           "openDashboard": true,
           "openURL": [
             {
