@@ -1,7 +1,13 @@
-.PHONY: dev kayros publish-kayros nomen publish-nomen
+.PHONY: dev build-kayros build-nomen kayros publish-kayros nomen publish-nomen
 
 dev:
 	./scripts/dev.sh
+
+build-kayros:
+	cd kayros && npm run pack
+
+build-nomen:
+	cd nomen && npm run pack
 
 kayros:
 	@echo "Use 'make publish-kayros' to release Kayros."
