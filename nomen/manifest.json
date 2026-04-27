@@ -3,7 +3,7 @@
   "appDomain": "nomen.app.provable.dev",
   "icon": "logo.png",
   "description": "Sign Nomen link and sign-in challenges with your current PrivacySafe identity.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "components": {
     "/index.html": {
       "runtime": "web-gui",

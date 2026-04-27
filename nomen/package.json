@@ -1,6 +1,6 @@
 {
   "name": "nomen.app.provable.dev",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Nomen identity link signer for PrivacySafe",
   "type": "module",
   "scripts": {
