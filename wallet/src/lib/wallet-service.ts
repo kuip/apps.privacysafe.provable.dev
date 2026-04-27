@@ -18,7 +18,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { scrypt } from '@noble/hashes/scrypt';
 import { derivePath } from 'ed25519-hd-key';
 import { Buffer } from 'buffer';
-import { DEFAULT_NETWORKS, DEFAULT_TOKENS } from '@/lib/constants';
+import { DEFAULT_NETWORKS, DEFAULT_TOKENS, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
 import {
   base64ToBytes,
   bytesToBase64,
@@ -33,14 +33,19 @@ import type {
   AccountSecret,
   BalanceRequest,
   BalanceResult,
+  ChangePassphraseRequest,
   Chain,
   ImportMnemonicRequest,
   ImportPrivateKeyRequest,
   NetworkConfig,
+  ResetVaultRequest,
+  RevealRecoveryPhraseRequest,
+  RevealRecoveryPhraseResult,
   SignMessageRequest,
   SignMessageResult,
   SignTransactionRequest,
   SignTransactionResult,
+  TransactionHistoryEntry,
   TokenConfig,
   TransferRequest,
   TransferResult,
@@ -48,6 +53,7 @@ import type {
   VaultPlain,
   WalletAccount,
   WalletPublicState,
+  WalletSettings,
   WalletStatus,
 } from '@/lib/types';
 
@@ -69,14 +75,20 @@ type WalletVaultFile = {
   updatedAt: string;
 };
 
-const VAULT_PATH = 'wallet-vault-v1.json';
-const STATE_PATH = 'wallet-state-v1.json';
 const SCRYPT_PARAMS = { n: 2 ** 15, r: 8, p: 1, dkLen: 32 } as const;
 const ERC20_ABI = [
   'function balanceOf(address owner) view returns (uint256)',
   'function transfer(address to, uint256 amount) returns (bool)',
   'function decimals() view returns (uint8)',
 ];
+const ERC20_INTERFACE = new ethers.Interface(ERC20_ABI);
+
+const DEFAULT_SETTINGS: WalletSettings = {
+  requirePasswordForTransfers: true,
+  requirePasswordForMessageSigning: false,
+  requirePasswordForTransactionSigning: true,
+};
+const RPC_BALANCE_IMPL = 'wallet-rpc-direct-fetch-v2';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -92,7 +104,34 @@ function publicStateFromVault(vault: VaultPlain): WalletPublicState {
     accounts: vault.accounts,
     networks: [DEFAULT_NETWORKS.ethereum, DEFAULT_NETWORKS.solana] as NetworkConfig[],
     tokens: [...DEFAULT_TOKENS] as TokenConfig[],
+    history: vault.history ?? [],
+    settings: vault.settings ?? DEFAULT_SETTINGS,
     updatedAt: vault.updatedAt,
+  };
+}
+
+function normalizePublicState(state: WalletPublicState | undefined): WalletPublicState | undefined {
+  if (!state) {
+    return undefined;
+  }
+  return {
+    ...state,
+    history: state.history ?? [],
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(state.settings ?? {}),
+    },
+  };
+}
+
+function normalizeVault(vault: VaultPlain): VaultPlain {
+  return {
+    ...vault,
+    history: vault.history ?? [],
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(vault.settings ?? {}),
+    },
   };
 }
 
@@ -143,7 +182,7 @@ async function decryptVault(passphrase: string, file: WalletVaultFile): Promise<
     key,
     new Uint8Array(base64ToBytes(file.cipher.data)),
   );
-  return JSON.parse(utf8String(new Uint8Array(decrypted))) as VaultPlain;
+  return normalizeVault(JSON.parse(utf8String(new Uint8Array(decrypted))) as VaultPlain);
 }
 
 function makeEmptyVault(): VaultPlain {
@@ -152,6 +191,8 @@ function makeEmptyVault(): VaultPlain {
     version: 1,
     accounts: [],
     secrets: {},
+    history: [],
+    settings: { ...DEFAULT_SETTINGS },
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -211,6 +252,44 @@ function solanaExplorer(signature: string): string {
   return `https://explorer.solana.com/tx/${signature}`;
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  if (typeof err === 'object' && err && 'message' in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return String(err);
+}
+
+type JsonRpcResponse<T> = {
+  result?: T;
+  error?: {
+    code?: number;
+    message?: string;
+  };
+};
+
+type SolanaTokenAccountsResult = {
+  value: {
+    account: {
+      data: {
+        parsed?: {
+          info?: {
+            tokenAmount?: {
+              amount?: string;
+            };
+          };
+        };
+      };
+    };
+  }[];
+};
+
+type SolanaBalanceResult = {
+  value: number;
+};
+
 export class WalletService {
   private vault?: VaultPlain;
   private passphrase?: string;
@@ -220,8 +299,9 @@ export class WalletService {
   async initialize(): Promise<void> {
     const localStore = await openJsonStore('local');
     const syncedStore = await openJsonStore('synced');
-    this.vaultFile = await localStore.read<WalletVaultFile>(VAULT_PATH);
-    this.publicState = await syncedStore.read<WalletPublicState>(STATE_PATH);
+    this.vaultFile = await localStore.read<WalletVaultFile>(WALLET_VAULT_PATH);
+    this.publicState = normalizePublicState(await syncedStore.read<WalletPublicState>(WALLET_STATE_PATH));
+    await w3n.log?.('info', `Wallet balance RPC implementation: ${RPC_BALANCE_IMPL}`);
   }
 
   async status(): Promise<WalletStatus> {
@@ -281,7 +361,75 @@ export class WalletService {
       accounts: [],
       networks: [DEFAULT_NETWORKS.ethereum, DEFAULT_NETWORKS.solana] as NetworkConfig[],
       tokens: [...DEFAULT_TOKENS] as TokenConfig[],
+      history: [],
+      settings: { ...DEFAULT_SETTINGS },
       updatedAt: nowIso(),
+    };
+  }
+
+  async updateSettings(settings: Partial<WalletSettings>): Promise<WalletPublicState> {
+    assertUnlocked(this.vault);
+    this.vault.settings = {
+      ...DEFAULT_SETTINGS,
+      ...this.vault.settings,
+      ...settings,
+    };
+    await this.persist();
+    return publicStateFromVault(this.vault);
+  }
+
+  async changePassphrase(request: ChangePassphraseRequest): Promise<WalletStatus> {
+    if (!request.newPassphrase) {
+      throw new Error('New wallet password is required.');
+    }
+    if (!this.vaultFile) {
+      await this.initialize();
+    }
+    if (!this.vaultFile) {
+      throw new Error('Wallet vault file is not loaded.');
+    }
+    this.vault = await decryptVault(request.currentPassphrase, this.vaultFile);
+    this.passphrase = request.newPassphrase;
+    await this.persist();
+    return this.status();
+  }
+
+  async resetVault(request: ResetVaultRequest): Promise<WalletStatus> {
+    if (!this.vaultFile) {
+      await this.initialize();
+    }
+    if (this.vaultFile) {
+      await decryptVault(request.passphrase, this.vaultFile);
+    }
+
+    const localStore = await openJsonStore('local');
+    const syncedStore = await openJsonStore('synced');
+    await localStore.delete(WALLET_VAULT_PATH);
+    await syncedStore.delete(WALLET_STATE_PATH);
+
+    this.vault = undefined;
+    this.passphrase = undefined;
+    this.vaultFile = undefined;
+    this.publicState = undefined;
+    return {
+      exists: false,
+      unlocked: false,
+      accountCount: 0,
+    };
+  }
+
+  async revealRecoveryPhrase(request: RevealRecoveryPhraseRequest): Promise<RevealRecoveryPhraseResult> {
+    assertUnlocked(this.vault);
+    await this.confirmPassphrase(request.passphrase);
+    const account = await this.getAccount(request.accountId);
+    const secret = this.vault.secrets[account.id];
+    if (!secret?.mnemonic) {
+      throw new Error('This account was imported from a private key and has no recovery phrase.');
+    }
+    return {
+      accountId: account.id,
+      mnemonic: secret.mnemonic,
+      derivationPath: secret.derivationPath,
     };
   }
 
@@ -369,41 +517,62 @@ export class WalletService {
 
   async getBalance(request: BalanceRequest): Promise<BalanceResult> {
     const account = await this.getAccount(request.accountId);
-    if (request.tokenId) {
-      const token = await this.getToken(request.tokenId);
-      if (token.chain !== account.chain) {
-        throw new Error('Token chain does not match account chain.');
+    try {
+      if (request.tokenId) {
+        const token = await this.getToken(request.tokenId);
+        if (token.chain !== account.chain) {
+          throw new Error('Token chain does not match account chain.');
+        }
+        return account.chain === 'ethereum'
+          ? this.getEthereumTokenBalance(account, token)
+          : this.getSolanaTokenBalance(account, token);
       }
-      return account.chain === 'ethereum'
-        ? this.getEthereumTokenBalance(account, token)
-        : this.getSolanaTokenBalance(account, token);
-    }
 
-    return account.chain === 'ethereum'
-      ? this.getEthereumNativeBalance(account)
-      : this.getSolanaNativeBalance(account);
+      return account.chain === 'ethereum'
+        ? this.getEthereumNativeBalance(account)
+        : this.getSolanaNativeBalance(account);
+    } catch (err) {
+      if (/Could not reach .* RPC endpoint/i.test(errorMessage(err))) {
+        throw err;
+      }
+      if (this.isNetworkFetchError(err)) {
+        throw new Error(
+          `Could not reach ${account.chain === 'ethereum' ? 'Ethereum' : 'Solana'} RPC endpoint. Balance is unavailable right now.`,
+        );
+      }
+      throw err;
+    }
   }
 
   async transfer(request: TransferRequest): Promise<TransferResult> {
     assertUnlocked(this.vault);
+    await this.confirmIfRequired('transfer', request.passphrase);
     const account = await this.getAccount(request.accountId);
+    let result: TransferResult;
     if (request.tokenId) {
       const token = await this.getToken(request.tokenId);
       if (token.chain !== account.chain) {
         throw new Error('Token chain does not match account chain.');
       }
-      return account.chain === 'ethereum'
+      result = await (account.chain === 'ethereum'
         ? this.transferEthereumToken(account, token, request)
-        : this.transferSolanaToken(account, token, request);
+        : this.transferSolanaToken(account, token, request));
+      await this.tryRecordTransaction(account, request, result, token.symbol);
+      return result;
     }
 
-    return account.chain === 'ethereum'
+    result = await (account.chain === 'ethereum'
       ? this.transferEthereumNative(account, request)
-      : this.transferSolanaNative(account, request);
+      : this.transferSolanaNative(account, request));
+    await this.tryRecordTransaction(account, request, result, account.chain === 'ethereum'
+      ? DEFAULT_NETWORKS.ethereum.nativeSymbol
+      : DEFAULT_NETWORKS.solana.nativeSymbol);
+    return result;
   }
 
   async signMessage(request: SignMessageRequest): Promise<SignMessageResult> {
     assertUnlocked(this.vault);
+    await this.confirmIfRequired('message-signing', request.passphrase);
     const account = await this.getAccount(request.accountId);
     const secret = this.vault.secrets[account.id];
     if (!secret) {
@@ -433,6 +602,7 @@ export class WalletService {
 
   async signTransaction(request: SignTransactionRequest): Promise<SignTransactionResult> {
     assertUnlocked(this.vault);
+    await this.confirmIfRequired('transaction-signing', request.passphrase);
     const account = await this.getAccount(request.accountId);
     const secret = this.vault.secrets[account.id];
     if (!secret) {
@@ -498,8 +668,75 @@ export class WalletService {
 
     const localStore = await openJsonStore('local');
     const syncedStore = await openJsonStore('synced');
-    await localStore.write(VAULT_PATH, this.vaultFile);
-    await syncedStore.write(STATE_PATH, this.publicState);
+    await localStore.write(WALLET_VAULT_PATH, this.vaultFile);
+    await syncedStore.write(WALLET_STATE_PATH, this.publicState);
+  }
+
+  private async confirmPassphrase(passphrase: string | undefined): Promise<void> {
+    if (!passphrase) {
+      throw new Error('Wallet password confirmation is required.');
+    }
+    if (!this.vaultFile) {
+      throw new Error('Wallet vault file is not loaded.');
+    }
+    await decryptVault(passphrase, this.vaultFile);
+  }
+
+  private async confirmIfRequired(
+    operation: 'transfer' | 'message-signing' | 'transaction-signing',
+    passphrase: string | undefined,
+  ): Promise<void> {
+    assertUnlocked(this.vault);
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      ...this.vault.settings,
+    };
+    const required = operation === 'transfer'
+      ? settings.requirePasswordForTransfers
+      : operation === 'message-signing'
+        ? settings.requirePasswordForMessageSigning
+        : settings.requirePasswordForTransactionSigning;
+
+    if (!required) {
+      return;
+    }
+    await this.confirmPassphrase(passphrase);
+  }
+
+  private async recordTransaction(
+    account: WalletAccount,
+    request: TransferRequest,
+    result: TransferResult,
+    assetSymbol: string,
+  ): Promise<void> {
+    assertUnlocked(this.vault);
+    const entry: TransactionHistoryEntry = {
+      id: `${Date.now()}:${result.signature}`,
+      accountId: account.id,
+      chain: account.chain,
+      networkKey: account.networkKey,
+      assetSymbol,
+      amount: request.amount,
+      to: request.to,
+      signature: result.signature,
+      explorerUrl: result.explorerUrl,
+      createdAt: nowIso(),
+    };
+    this.vault.history = [entry, ...(this.vault.history ?? [])].slice(0, 100);
+    await this.persist();
+  }
+
+  private async tryRecordTransaction(
+    account: WalletAccount,
+    request: TransferRequest,
+    result: TransferResult,
+    assetSymbol: string,
+  ): Promise<void> {
+    try {
+      await this.recordTransaction(account, request, result, assetSymbol);
+    } catch (err) {
+      await w3n.log?.('error', 'Wallet failed to record transaction history', err);
+    }
   }
 
   private async getAccount(accountIdToFind: string): Promise<WalletAccount> {
@@ -520,61 +757,168 @@ export class WalletService {
     return token;
   }
 
-  private ethereumProvider(): ethers.JsonRpcProvider {
-    return new ethers.JsonRpcProvider(DEFAULT_NETWORKS.ethereum.rpcUrl, DEFAULT_NETWORKS.ethereum.chainId);
+  private ethereumRpcUrls(): string[] {
+    return Array.from(new Set([
+      DEFAULT_NETWORKS.ethereum.rpcUrl,
+      ...(DEFAULT_NETWORKS.ethereum.rpcUrls ?? []),
+    ]));
   }
 
-  private solanaConnection(): Connection {
-    return new Connection(DEFAULT_NETWORKS.solana.rpcUrl, 'confirmed');
+  private solanaRpcUrls(): string[] {
+    return Array.from(new Set([
+      DEFAULT_NETWORKS.solana.rpcUrl,
+      ...(DEFAULT_NETWORKS.solana.rpcUrls ?? []),
+    ]));
+  }
+
+  private ethereumProvider(rpcUrl: string = DEFAULT_NETWORKS.ethereum.rpcUrl): ethers.JsonRpcProvider {
+    return new ethers.JsonRpcProvider(rpcUrl, DEFAULT_NETWORKS.ethereum.chainId);
+  }
+
+  private solanaConnection(rpcUrl: string = DEFAULT_NETWORKS.solana.rpcUrl): Connection {
+    return new Connection(rpcUrl, 'confirmed');
+  }
+
+  private isNetworkFetchError(err: unknown): boolean {
+    const text = err instanceof Error
+      ? `${err.message}\n${err.stack ?? ''}`
+      : typeof err === 'object' && err
+        ? JSON.stringify(err)
+        : String(err);
+    return /Failed to fetch|network|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|HTTP (408|425|429|5\d\d)|Too many connections|rate limit/i.test(text);
+  }
+
+  private async withRpcFallback<T>(
+    chain: Chain,
+    urls: string[],
+    operation: (rpcUrl: string) => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown;
+    const attempts: string[] = [];
+    for (const url of urls) {
+      try {
+        return await operation(url);
+      } catch (err) {
+        attempts.push(`${url}: ${errorMessage(err)}`);
+        if (!this.isNetworkFetchError(err)) {
+          throw err;
+        }
+        lastError = err;
+      }
+    }
+    await w3n.log?.('error', `Wallet could not reach ${chain} RPC endpoints: ${attempts.join(' | ')}`, lastError);
+    throw new Error(
+      `Could not reach ${chain === 'ethereum' ? 'Ethereum' : 'Solana'} RPC endpoint. Balance is unavailable right now. Tried ${urls.length} endpoints: ${attempts.join(' | ')}`,
+    );
+  }
+
+  private async jsonRpc<T>(
+    rpcUrl: string,
+    method: string,
+    params: unknown[],
+    contentType = 'application/json',
+  ): Promise<T> {
+    let response: Response;
+    try {
+      response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': contentType,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method,
+          params,
+        }),
+        cache: 'no-store',
+      });
+    } catch (err) {
+      throw new Error(`RPC ${method} fetch failed for ${rpcUrl}: ${errorMessage(err)}`);
+    }
+    if (!response.ok) {
+      throw new Error(`RPC ${method} failed for ${rpcUrl} with HTTP ${response.status}.`);
+    }
+    const payload = await response.json() as JsonRpcResponse<T>;
+    if (payload.error) {
+      const code = payload.error.code === undefined ? '' : ` ${payload.error.code}`;
+      throw new Error(`RPC ${method} failed for ${rpcUrl}${code}: ${payload.error.message ?? 'Unknown RPC error'}.`);
+    }
+    if (payload.result === undefined) {
+      throw new Error(`RPC ${method} returned no result from ${rpcUrl}.`);
+    }
+    return payload.result;
   }
 
   private async getEthereumNativeBalance(account: WalletAccount): Promise<BalanceResult> {
-    const raw = await this.ethereumProvider().getBalance(account.address);
-    return {
-      accountId: account.id,
-      symbol: DEFAULT_NETWORKS.ethereum.nativeSymbol,
-      raw: raw.toString(),
-      formatted: formatUnits(raw, 18),
-    };
+    return this.withRpcFallback('ethereum', this.ethereumRpcUrls(), async rpcUrl => {
+      const rawHex = await this.jsonRpc<string>(
+        rpcUrl,
+        'eth_getBalance',
+        [account.address, 'latest'],
+        'text/plain;charset=UTF-8',
+      );
+      const raw = BigInt(rawHex);
+      return {
+        accountId: account.id,
+        symbol: DEFAULT_NETWORKS.ethereum.nativeSymbol,
+        raw: raw.toString(),
+        formatted: formatUnits(raw, 18),
+      };
+    });
   }
 
   private async getSolanaNativeBalance(account: WalletAccount): Promise<BalanceResult> {
-    const raw = await this.solanaConnection().getBalance(new PublicKey(account.address));
-    return {
-      accountId: account.id,
-      symbol: DEFAULT_NETWORKS.solana.nativeSymbol,
-      raw: String(raw),
-      formatted: String(raw / LAMPORTS_PER_SOL),
-    };
+    return this.withRpcFallback('solana', this.solanaRpcUrls(), async rpcUrl => {
+      const result = await this.jsonRpc<SolanaBalanceResult>(rpcUrl, 'getBalance', [account.address]);
+      const raw = result.value;
+      return {
+        accountId: account.id,
+        symbol: DEFAULT_NETWORKS.solana.nativeSymbol,
+        raw: String(raw),
+        formatted: String(raw / LAMPORTS_PER_SOL),
+      };
+    });
   }
 
   private async getEthereumTokenBalance(account: WalletAccount, token: TokenConfig): Promise<BalanceResult> {
-    const contract = new ethers.Contract(token.address, ERC20_ABI, this.ethereumProvider());
-    const raw = await contract.balanceOf(account.address) as bigint;
-    return {
-      accountId: account.id,
-      symbol: token.symbol,
-      raw: raw.toString(),
-      formatted: formatUnits(raw, token.decimals),
-    };
+    return this.withRpcFallback('ethereum', this.ethereumRpcUrls(), async rpcUrl => {
+      const data = ERC20_INTERFACE.encodeFunctionData('balanceOf', [account.address]);
+      const rawHex = await this.jsonRpc<string>(
+        rpcUrl,
+        'eth_call',
+        [{ to: token.address, data }, 'latest'],
+        'text/plain;charset=UTF-8',
+      );
+      const [raw] = ERC20_INTERFACE.decodeFunctionResult('balanceOf', rawHex) as unknown as [bigint];
+      return {
+        accountId: account.id,
+        symbol: token.symbol,
+        raw: raw.toString(),
+        formatted: formatUnits(raw, token.decimals),
+      };
+    });
   }
 
   private async getSolanaTokenBalance(account: WalletAccount, token: TokenConfig): Promise<BalanceResult> {
-    const owner = new PublicKey(account.address);
-    const mint = new PublicKey(token.address);
-    const accounts = await this.solanaConnection().getParsedTokenAccountsByOwner(owner, {
-      mint,
+    return this.withRpcFallback('solana', this.solanaRpcUrls(), async rpcUrl => {
+      const accounts = await this.jsonRpc<SolanaTokenAccountsResult>(rpcUrl, 'getTokenAccountsByOwner', [
+        account.address,
+        { mint: token.address },
+        { encoding: 'jsonParsed' },
+      ]);
+      const raw = accounts.value.reduce((sum, item) => {
+        const amount = item.account.data.parsed?.info?.tokenAmount?.amount ?? '0';
+        return sum + BigInt(amount);
+      }, 0n);
+      return {
+        accountId: account.id,
+        symbol: token.symbol,
+        raw: raw.toString(),
+        formatted: formatUnits(raw, token.decimals),
+      };
     });
-    const raw = accounts.value.reduce((sum, item) => {
-      const amount = item.account.data.parsed.info.tokenAmount.amount as string;
-      return sum + BigInt(amount);
-    }, 0n);
-    return {
-      accountId: account.id,
-      symbol: token.symbol,
-      raw: raw.toString(),
-      formatted: formatUnits(raw, token.decimals),
-    };
   }
 
   private async transferEthereumNative(account: WalletAccount, request: TransferRequest): Promise<TransferResult> {

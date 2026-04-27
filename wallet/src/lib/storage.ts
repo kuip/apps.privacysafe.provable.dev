@@ -1,6 +1,7 @@
 type JsonFileStore = {
   read<T>(path: string): Promise<T | undefined>;
   write(path: string, value: unknown): Promise<void>;
+  delete(path: string): Promise<void>;
 };
 
 function localStorageKey(scope: 'local' | 'synced', path: string): string {
@@ -15,6 +16,9 @@ function browserFallback(scope: 'local' | 'synced'): JsonFileStore {
     },
     async write(path: string, value: unknown): Promise<void> {
       localStorage.setItem(localStorageKey(scope, path), JSON.stringify(value));
+    },
+    async delete(path: string): Promise<void> {
+      localStorage.removeItem(localStorageKey(scope, path));
     },
   };
 }
@@ -42,6 +46,16 @@ async function privacySafeStore(scope: 'local' | 'synced'): Promise<JsonFileStor
     },
     async write(path: string, value: unknown): Promise<void> {
       await fs.writeJSONFile(path, value);
+    },
+    async delete(path: string): Promise<void> {
+      try {
+        await (fs as web3n.files.WritableFS & { deleteFile(path: string): Promise<void> }).deleteFile(path);
+      } catch (err) {
+        if ((err as web3n.files.FileException).notFound) {
+          return;
+        }
+        throw err;
+      }
     },
   };
 }

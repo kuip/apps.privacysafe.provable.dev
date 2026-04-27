@@ -37,6 +37,10 @@ declare const w3n: {
   };
   shell?: {
     getFSResource?: (appDomain: string, resource: string) => Promise<web3n.files.ReadableFile | undefined>;
+    openURL?: (url: string) => Promise<void>;
+    clipboard?: {
+      writeText?: (text: string) => Promise<void>;
+    };
   };
   log?: (level: string, message: string, err?: unknown) => Promise<void> | void;
 };

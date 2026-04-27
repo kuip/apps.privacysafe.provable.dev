@@ -1,7 +1,7 @@
 {
   "name": "Wallet",
   "appDomain": "wallet.app.provable.dev",
-  "icon": "logo.svg",
+  "icon": "logo.png",
   "description": "Minimal Ethereum and Solana wallet for PrivacySafe apps.",
   "version": "0.1.0",
   "components": {
@@ -14,15 +14,25 @@
       ],
       "capsRequested": {
         "appRPC": [
-          "WalletSigner"
+          "WalletInternal"
         ],
         "shell": {
-          "clipboard": "all",
+          "clipboard": "writeonly",
           "fsResource": {
             "otherApps": {
               "launcher.app.privacysafe.io": "ui-settings"
             }
           },
+          "openURL": [
+            {
+              "schema": "https",
+              "domain": "etherscan.io"
+            },
+            {
+              "schema": "https",
+              "domain": "explorer.solana.com"
+            }
+          ],
           "openDashboard": true
         },
         "storage": {
@@ -36,11 +46,19 @@
             },
             {
               "schema": "https",
+              "domain": "eth.llamarpc.com"
+            },
+            {
+              "schema": "https",
               "domain": "sepolia.drpc.org"
             },
             {
               "schema": "https",
               "domain": "api.mainnet-beta.solana.com"
+            },
+            {
+              "schema": "https",
+              "domain": "solana-rpc.publicnode.com"
             },
             {
               "schema": "https",
@@ -60,6 +78,9 @@
     "/service.html": {
       "runtime": "web-gui",
       "services": {
+        "WalletInternal": {
+          "thisAppComponents": "*"
+        },
         "WalletSigner": {
           "thisAppComponents": "*",
           "otherApps": "*"
@@ -77,11 +98,19 @@
             },
             {
               "schema": "https",
+              "domain": "eth.llamarpc.com"
+            },
+            {
+              "schema": "https",
               "domain": "sepolia.drpc.org"
             },
             {
               "schema": "https",
               "domain": "api.mainnet-beta.solana.com"
+            },
+            {
+              "schema": "https",
+              "domain": "solana-rpc.publicnode.com"
             },
             {
               "schema": "https",
@@ -107,7 +136,7 @@
   "launchers": [
     {
       "name": "Wallet",
-      "icon": "logo.svg",
+      "icon": "logo.png",
       "description": "Minimal Ethereum and Solana wallet for PrivacySafe apps.",
       "component": "/index.html",
       "formFactor": [
@@ -120,7 +149,7 @@
     {
       "name": "Wallet signer service",
       "component": "/service.html",
-      "icon": "logo.svg",
+      "icon": "logo.png",
       "description": "Starts the wallet signing service for PrivacySafe app requests."
     }
   ]

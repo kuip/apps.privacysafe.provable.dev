@@ -1,14 +1,18 @@
-import { WALLET_SERVICE_NAME } from '@/lib/constants';
+import { WALLET_INTERNAL_SERVICE_NAME, WALLET_SERVICE_NAME } from '@/lib/constants';
 import { decodeJson, encodeJson } from '@/lib/json-rpc';
 import { WalletService } from '@/lib/wallet-service';
 import type {
   BalanceRequest,
+  ChangePassphraseRequest,
   ImportMnemonicRequest,
   ImportPrivateKeyRequest,
+  ResetVaultRequest,
+  RevealRecoveryPhraseRequest,
   SignMessageRequest,
   SignTransactionRequest,
   TransferRequest,
   UnlockRequest,
+  WalletSettings,
 } from '@/lib/types';
 
 type CallStart = {
@@ -21,6 +25,32 @@ type CallStart = {
 type IncomingConnection = web3n.rpc.Connection;
 
 const service = new WalletService();
+const internalMethods = new Set([
+  'status',
+  'createMnemonic',
+  'unlock',
+  'lock',
+  'getPublicState',
+  'listAccounts',
+  'updateSettings',
+  'changePassphrase',
+  'resetVault',
+  'revealRecoveryPhrase',
+  'importMnemonic',
+  'importPrivateKey',
+  'getBalance',
+  'transfer',
+  'signMessage',
+  'signTransaction',
+]);
+const externalMethods = new Set([
+  'getPublicState',
+  'listAccounts',
+  'getBalance',
+  'transfer',
+  'signMessage',
+  'signTransaction',
+]);
 
 function statusEl(): HTMLElement | null {
   return document.getElementById('service-status');
@@ -53,6 +83,14 @@ async function callMethod(method: string, data: web3n.rpc.PassedDatum | undefine
       return service.getPublicState();
     case 'listAccounts':
       return service.listAccounts();
+    case 'updateSettings':
+      return service.updateSettings(decodeJson<Partial<WalletSettings>>(data));
+    case 'changePassphrase':
+      return service.changePassphrase(decodeJson<ChangePassphraseRequest>(data));
+    case 'resetVault':
+      return service.resetVault(decodeJson<ResetVaultRequest>(data));
+    case 'revealRecoveryPhrase':
+      return service.revealRecoveryPhrase(decodeJson<RevealRecoveryPhraseRequest>(data));
     case 'importMnemonic':
       return service.importMnemonic(decodeJson<ImportMnemonicRequest>(data));
     case 'importPrivateKey':
@@ -70,10 +108,18 @@ async function callMethod(method: string, data: web3n.rpc.PassedDatum | undefine
   }
 }
 
-async function handleCall(connection: IncomingConnection, call: CallStart): Promise<void> {
+async function handleCall(
+  serviceName: string,
+  allowedMethods: Set<string>,
+  connection: IncomingConnection,
+  call: CallStart,
+): Promise<void> {
   const { callNum, method, data } = call;
-  updateStatus(`Wallet service handling ${method}...`);
+  updateStatus(`${serviceName} handling ${method}...`);
   try {
+    if (!allowedMethods.has(method)) {
+      throw new Error(`Method ${method} is not exposed by ${serviceName}.`);
+    }
     const result = await callMethod(method, data);
     await connection.send({
       callNum,
@@ -89,6 +135,34 @@ async function handleCall(connection: IncomingConnection, call: CallStart): Prom
   } finally {
     updateStatus('Wallet service waiting for requests.');
   }
+}
+
+function exposeWalletService(serviceName: string, allowedMethods: Set<string>): void {
+  w3n.rpc!.exposeService!(serviceName, {
+    next(connection) {
+      updateStatus(`${serviceName} connected.`);
+      connection.watch({
+        next: async message => {
+          const call = message as Partial<CallStart>;
+          if (call.msgType === 'start') {
+            await handleCall(serviceName, allowedMethods, connection, call as CallStart);
+          }
+        },
+        complete: () => {
+          updateStatus('Wallet service waiting for requests.');
+        },
+        error: async err => {
+          await reportServiceError(`${serviceName} connection failed`, err);
+        },
+      });
+    },
+    complete: () => {
+      updateStatus(`${serviceName} stopped.`);
+    },
+    error: async err => {
+      await reportServiceError(`failed to expose ${serviceName}`, err);
+    },
+  });
 }
 
 async function bootstrapService(attempt = 0): Promise<void> {
@@ -109,33 +183,10 @@ async function bootstrapService(attempt = 0): Promise<void> {
 
   try {
     await service.initialize();
-    runtime.rpc.exposeService(WALLET_SERVICE_NAME, {
-      next(connection) {
-        updateStatus('Wallet service connected.');
-        connection.watch({
-          next: async message => {
-            const call = message as Partial<CallStart>;
-            if (call.msgType === 'start') {
-              await handleCall(connection, call as CallStart);
-            }
-          },
-          complete: () => {
-            updateStatus('Wallet service waiting for requests.');
-          },
-          error: async err => {
-            await reportServiceError('connection failed', err);
-          },
-        });
-      },
-      complete: () => {
-        updateStatus('Wallet service stopped.');
-      },
-      error: async err => {
-        await reportServiceError('failed to expose service', err);
-      },
-    });
+    exposeWalletService(WALLET_INTERNAL_SERVICE_NAME, internalMethods);
+    exposeWalletService(WALLET_SERVICE_NAME, externalMethods);
     updateStatus('Wallet service waiting for requests.');
-    await runtime.log?.('info', 'Wallet service exposed');
+    await runtime.log?.('info', 'Wallet services exposed');
   } catch (err) {
     await reportServiceError('failed during startup', err);
   }

@@ -7,6 +7,7 @@ export interface NetworkConfig {
   name: string;
   nativeSymbol: string;
   rpcUrl: string;
+  rpcUrls?: readonly string[];
   chainId?: number;
 }
 
@@ -36,7 +37,15 @@ export interface WalletPublicState {
   accounts: WalletAccount[];
   networks: NetworkConfig[];
   tokens: TokenConfig[];
+  history: TransactionHistoryEntry[];
+  settings: WalletSettings;
   updatedAt: string;
+}
+
+export interface WalletSettings {
+  requirePasswordForTransfers: boolean;
+  requirePasswordForMessageSigning: boolean;
+  requirePasswordForTransactionSigning: boolean;
 }
 
 export interface AccountSecret {
@@ -51,6 +60,8 @@ export interface VaultPlain {
   version: 1;
   accounts: WalletAccount[];
   secrets: Record<string, AccountSecret>;
+  history: TransactionHistoryEntry[];
+  settings: WalletSettings;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +92,26 @@ export interface UnlockRequest {
   passphrase: string;
 }
 
+export interface ChangePassphraseRequest {
+  currentPassphrase: string;
+  newPassphrase: string;
+}
+
+export interface ResetVaultRequest {
+  passphrase: string;
+}
+
+export interface RevealRecoveryPhraseRequest {
+  accountId: string;
+  passphrase: string;
+}
+
+export interface RevealRecoveryPhraseResult {
+  accountId: string;
+  mnemonic: string;
+  derivationPath?: string;
+}
+
 export interface BalanceRequest {
   accountId: string;
   tokenId?: string;
@@ -98,6 +129,7 @@ export interface TransferRequest {
   to: string;
   amount: string;
   tokenId?: string;
+  passphrase?: string;
 }
 
 export interface TransferResult {
@@ -107,9 +139,23 @@ export interface TransferResult {
   explorerUrl?: string;
 }
 
+export interface TransactionHistoryEntry {
+  id: string;
+  accountId: string;
+  chain: Chain;
+  networkKey: string;
+  assetSymbol: string;
+  amount: string;
+  to: string;
+  signature: string;
+  explorerUrl?: string;
+  createdAt: string;
+}
+
 export interface SignMessageRequest {
   accountId: string;
   message: string;
+  passphrase?: string;
 }
 
 export interface SignMessageResult {
@@ -123,6 +169,7 @@ export interface SignTransactionRequest {
   accountId: string;
   transaction: unknown;
   encoding?: 'json' | 'base64';
+  passphrase?: string;
 }
 
 export interface SignTransactionResult {

@@ -1,4 +1,4 @@
-.PHONY: dev build-kayros build-nomen kayros publish-kayros nomen publish-nomen
+.PHONY: dev build-kayros build-nomen build-wallet kayros publish-kayros nomen publish-nomen wallet
 
 dev:
 	./scripts/dev.sh
@@ -8,6 +8,9 @@ build-kayros:
 
 build-nomen:
 	cd nomen && npm run pack
+
+build-wallet:
+	cd wallet && npm run pack
 
 kayros:
 	@echo "Use 'make publish-kayros' to release Kayros."
@@ -20,3 +23,6 @@ nomen:
 
 publish-nomen:
 	./scripts/release-nomen.sh
+
+wallet:
+	@echo "Use 'make build-wallet' while wallet release flow is still manual."

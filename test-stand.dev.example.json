@@ -9,6 +9,16 @@
       "dir": "kayros",
       "url": "http://127.0.0.1:5175",
       "launchComponent": "/index.html"
+    },
+    "wallet.app.provable.dev": {
+      "dir": "wallet",
+      "url": "http://127.0.0.1:5176",
+      "launchComponent": "/index.html"
+    },
+    "treasure.app.privacysafe.io": {
+      "dir": "../gitlab/treasure.app.privacysafe.io",
+      "url": "http://127.0.0.1:3031",
+      "launchComponent": "/index.html"
     }
   },
   "startupApp": {
