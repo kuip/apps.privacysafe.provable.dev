@@ -1,0 +1,5 @@
+node_modules
+dist
+build
+app
+.DS_Store
