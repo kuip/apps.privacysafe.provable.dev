@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
 import { WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
 import { callThisAppService } from '@/lib/json-rpc';
@@ -46,7 +46,10 @@ const errorMessage = ref('');
 const errorDetails = ref('');
 const activeTab = ref<'home' | 'create' | 'settings' | 'history'>('home');
 const generatedMnemonic = ref('');
-const balance = ref<BalanceResult | null>(null);
+const balanceByKey = ref<Record<string, BalanceResult>>({});
+const balanceErrors = ref<Record<string, string>>({});
+const balancesLoading = ref(false);
+const balancesUpdatedAt = ref('');
 const lastTransfer = ref<TransferResult | null>(null);
 const lastSignature = ref('');
 const selectedNetworkKey = ref('');
@@ -92,6 +95,9 @@ const passwordDialog = reactive({
   passphrase: '',
 });
 let passwordDialogResolve: ((value: string | null) => void) | undefined;
+let balanceRefreshTimer: number | undefined;
+let balanceRefreshSeq = 0;
+let balanceRefreshQueued = false;
 
 const selectedNetwork = computed(() => (
   state.value.networks.find(network => network.key === selectedNetworkKey.value)
@@ -123,6 +129,16 @@ const selectedAssetSymbol = computed(() => {
   }
   return selectedAccount.value?.chain === 'ethereum' ? 'ETH' : 'SOL';
 });
+const nativeBalance = computed(() => (
+  selectedAccount.value ? balanceByKey.value[balanceKey(selectedAccount.value.id)] : undefined
+));
+const trackedTokenRows = computed(() => (
+  compatibleTokens.value.map(token => ({
+    token,
+    balance: selectedAccount.value ? balanceByKey.value[balanceKey(selectedAccount.value.id, token.id)] : undefined,
+    error: selectedAccount.value ? balanceErrors.value[balanceKey(selectedAccount.value.id, token.id)] : undefined,
+  }))
+));
 
 const vaultConfirmMismatch = computed(() => (
   !status.value.exists
@@ -223,6 +239,14 @@ function setError(err: unknown): void {
 function clearError(): void {
   errorMessage.value = '';
   errorDetails.value = '';
+}
+
+function balanceKey(accountId: string, tokenId = 'native'): string {
+  return `${accountId}:${tokenId}`;
+}
+
+function balanceText(result: BalanceResult | undefined): string {
+  return result ? `${result.formatted} ${result.symbol}` : 'Loading';
 }
 
 async function requestWalletPassword(title: string, actionLabel: string): Promise<string | null> {
@@ -341,6 +365,7 @@ async function unlockOrCreateVault(): Promise<void> {
     vaultForm.passphrase = '';
     vaultForm.confirmPassphrase = '';
     await refresh();
+    await refreshSelectedBalances();
     setResult(status.value.exists ? 'Wallet unlocked.' : 'Wallet vault created.');
   });
 }
@@ -350,7 +375,9 @@ async function lock(): Promise<void> {
     status.value = await serviceCall<void, WalletStatus>('lock', undefined as void);
     selectedAccountId.value = '';
     selectedTokenId.value = '';
-    balance.value = null;
+    balanceByKey.value = {};
+    balanceErrors.value = {};
+    balancesUpdatedAt.value = '';
     activeTab.value = 'home';
     setResult('Wallet locked.');
   });
@@ -375,6 +402,7 @@ async function createNewWallet(): Promise<void> {
     });
     mnemonicForm.mnemonic = '';
     await refresh();
+    await refreshSelectedBalances();
     activeTab.value = 'home';
     setResult('New wallet created.');
   });
@@ -388,6 +416,7 @@ async function importMnemonic(): Promise<void> {
       name: addForm.accountName || undefined,
     });
     await refresh();
+    await refreshSelectedBalances();
     activeTab.value = 'home';
     setResult('Wallet imported.');
   });
@@ -402,26 +431,68 @@ async function importPrivateKey(): Promise<void> {
     });
     privateKeyForm.privateKey = '';
     await refresh();
+    await refreshSelectedBalances();
     activeTab.value = 'home';
     setResult('Private key imported.');
   });
 }
 
-async function loadBalance(): Promise<void> {
-  if (!selectedAccountId.value) {
+async function fetchBalance(accountId: string, tokenId?: string): Promise<void> {
+  const key = balanceKey(accountId, tokenId);
+  const result = await serviceCall<
+    { accountId: string; tokenId?: string },
+    BalanceResult
+  >('getBalance', {
+    accountId,
+    tokenId,
+  });
+  balanceByKey.value = {
+    ...balanceByKey.value,
+    [key]: result,
+  };
+  const nextErrors = { ...balanceErrors.value };
+  delete nextErrors[key];
+  balanceErrors.value = nextErrors;
+}
+
+async function refreshSelectedBalances(): Promise<void> {
+  const account = selectedAccount.value;
+  if (!account || !status.value.unlocked) {
     return;
   }
-  await run(async () => {
-    const result = await serviceCall<
-      { accountId: string; tokenId?: string },
-      BalanceResult
-    >('getBalance', {
-      accountId: selectedAccountId.value,
-      tokenId: selectedTokenId.value || undefined,
-    });
-    balance.value = result;
-    setResult(`${result.formatted} ${result.symbol}`);
-  });
+  if (balancesLoading.value) {
+    balanceRefreshQueued = true;
+    return;
+  }
+  const seq = ++balanceRefreshSeq;
+  balancesLoading.value = true;
+  const tokenIds = compatibleTokens.value.map(token => token.id);
+  const failed: Record<string, string> = {};
+
+  for (const tokenId of [undefined, ...tokenIds]) {
+    if (seq !== balanceRefreshSeq) {
+      break;
+    }
+    const key = balanceKey(account.id, tokenId);
+    try {
+      await fetchBalance(account.id, tokenId);
+    } catch (err) {
+      failed[key] = humanMessage(err);
+    }
+  }
+
+  if (seq === balanceRefreshSeq) {
+    balanceErrors.value = {
+      ...balanceErrors.value,
+      ...failed,
+    };
+    balancesUpdatedAt.value = new Date().toLocaleTimeString();
+    balancesLoading.value = false;
+    if (balanceRefreshQueued) {
+      balanceRefreshQueued = false;
+      void refreshSelectedBalances();
+    }
+  }
 }
 
 async function transfer(): Promise<void> {
@@ -449,6 +520,7 @@ async function transfer(): Promise<void> {
     });
     lastTransfer.value = result;
     await refresh();
+    await refreshSelectedBalances();
     setResult(`Transfer submitted: ${result.signature}`);
   });
 }
@@ -526,6 +598,9 @@ async function resetVault(): Promise<void> {
     selectedNetworkKey.value = '';
     selectedAccountId.value = '';
     selectedTokenId.value = '';
+    balanceByKey.value = {};
+    balanceErrors.value = {};
+    balancesUpdatedAt.value = '';
     generatedMnemonic.value = '';
     recoveryPhrase.value = '';
     recoveryPath.value = '';
@@ -556,20 +631,32 @@ async function openExternalUrl(url: string | undefined): Promise<void> {
 watch(() => state.value.settings, syncSettingsForm, { deep: true });
 watch(selectedNetworkKey, () => {
   selectedTokenId.value = '';
-  balance.value = null;
   if (!accountsForNetwork.value.some(account => account.id === selectedAccountId.value)) {
     selectedAccountId.value = accountsForNetwork.value[0]?.id ?? '';
   }
 });
 watch(selectedAccountId, () => {
   selectedTokenId.value = '';
-  balance.value = null;
   recoveryPhrase.value = '';
   recoveryPath.value = '';
+  void refreshSelectedBalances();
+});
+watch(() => compatibleTokens.value.map(token => token.id).join(','), () => {
+  void refreshSelectedBalances();
 });
 
 onMounted(async () => {
   await run(loadInitialStateWithoutRpc);
+  void refreshSelectedBalances();
+  balanceRefreshTimer = window.setInterval(() => {
+    void refreshSelectedBalances();
+  }, 30000);
+});
+
+onUnmounted(() => {
+  if (balanceRefreshTimer !== undefined) {
+    window.clearInterval(balanceRefreshTimer);
+  }
 });
 </script>
 
@@ -742,6 +829,9 @@ onMounted(async () => {
               <p v-if="selectedAccount" class="address-line">
                 {{ selectedAccount.address }}
               </p>
+              <p v-if="selectedAccount" class="account-balance">
+                {{ nativeBalance ? `${nativeBalance.formatted} ${nativeBalance.symbol}` : balancesLoading ? 'Loading balance' : 'Balance unavailable' }}
+              </p>
               <p v-else class="empty">Create or import an account to start.</p>
             </div>
             <button
@@ -756,25 +846,48 @@ onMounted(async () => {
             </button>
           </div>
 
-          <div class="asset-row">
-            <select v-model="selectedTokenId" :disabled="!selectedAccount">
-              <option value="">{{ selectedNetwork?.nativeSymbol || 'Asset' }}</option>
-              <option v-for="token in compatibleTokens" :key="token.id" :value="token.id">
-                {{ token.symbol }}
-              </option>
-            </select>
-            <button class="btn btn--primary" :disabled="busy || !selectedAccount" @click="loadBalance">
-              Balance
+          <small v-if="balancesUpdatedAt">Updated {{ balancesUpdatedAt }}</small>
+        </article>
+
+        <article class="panel token-balances-panel">
+          <div class="panel__header">
+            <h2>Tokens</h2>
+            <button
+              class="icon-action"
+              :disabled="balancesLoading || !selectedAccount"
+              title="Refresh balances"
+              aria-label="Refresh balances"
+              @click="refreshSelectedBalances"
+            >
+              <span aria-hidden="true">↻</span>
             </button>
-            <div class="balance-box">
-              {{ balance ? `${balance.formatted} ${balance.symbol}` : 'No balance loaded' }}
+          </div>
+          <div v-if="trackedTokenRows.length" class="token-balance-list">
+            <div v-for="row in trackedTokenRows" :key="row.token.id" class="token-balance-row">
+              <span class="token-mark">{{ row.token.symbol.slice(0, 3) }}</span>
+              <span class="token-meta">
+                <strong>{{ row.token.symbol }}</strong>
+                <small>{{ row.token.name }}</small>
+              </span>
+              <strong class="token-amount">{{ row.error ? 'Unavailable' : balanceText(row.balance) }}</strong>
+              <small v-if="row.error" class="token-error">{{ row.error }}</small>
             </div>
           </div>
+          <p v-else class="empty">No tracked tokens for this network.</p>
         </article>
 
         <div class="work-panels">
           <article class="subpanel">
             <h3>Transfer {{ selectedAssetSymbol }}</h3>
+            <label>
+              <span>Asset</span>
+              <select v-model="selectedTokenId" :disabled="!selectedAccount">
+                <option value="">{{ selectedNetwork?.nativeSymbol || 'Asset' }}</option>
+                <option v-for="token in compatibleTokens" :key="token.id" :value="token.id">
+                  {{ token.symbol }}
+                </option>
+              </select>
+            </label>
             <label>
               <span>Recipient</span>
               <input v-model.trim="transferForm.to" autocomplete="off" />

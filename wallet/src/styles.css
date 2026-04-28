@@ -274,12 +274,6 @@ textarea:focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-border-control-accent-default, #2f6fed) 18%, transparent);
 }
 
-.asset-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-s, 8px);
-}
-
 .btn,
 .icon-action,
 .lock-toggle,
@@ -418,22 +412,76 @@ textarea:focus {
 }
 
 .account-overview {
-  grid-template-rows: auto auto;
+  align-content: start;
 }
 
-.asset-row {
+.account-balance {
+  margin-top: var(--spacing-s, 8px);
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 750;
+  color: var(--color-text-control-primary-default, #172033);
+}
+
+.token-balances-panel {
+  max-height: 260px;
+  align-content: start;
+  overflow: hidden;
+}
+
+.token-balance-list {
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(160px, 220px) auto minmax(0, 1fr);
+  gap: var(--spacing-s, 8px);
+  overflow: auto;
 }
 
-.balance-box {
-  min-height: 36px;
-  display: flex;
+.token-balance-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
-  padding: 0 12px;
+  gap: var(--spacing-s, 8px);
+  padding: var(--spacing-s, 8px);
   border: 1px solid var(--color-border-block-primary-default, #d7dee7);
   border-radius: var(--spacing-xs, 4px);
-  color: var(--color-text-control-secondary-default, #64748b);
+  background-color: color-mix(in srgb, var(--color-bg-block-primary-default, #ffffff) 94%, var(--color-bg-control-accent-default, #2f6fed));
+}
+
+.token-mark {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background-color: #0d1824;
+  color: #d8b45d;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.token-meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.token-meta strong,
+.token-meta small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.token-amount {
+  justify-self: end;
+  text-align: right;
+  font-size: 14px;
+}
+
+.token-error {
+  grid-column: 2 / -1;
+  color: #b91c1c;
   overflow-wrap: anywhere;
 }
 
@@ -643,10 +691,6 @@ pre {
   .grid--setup,
   .work-panels,
   .settings-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .asset-row {
     grid-template-columns: 1fr;
   }
 
