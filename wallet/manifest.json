@@ -50,6 +50,14 @@
             },
             {
               "schema": "https",
+              "domain": "ethereum.drpc.org"
+            },
+            {
+              "schema": "https",
+              "domain": "rpc.flashbots.net"
+            },
+            {
+              "schema": "https",
               "domain": "sepolia.drpc.org"
             },
             {
@@ -99,6 +107,14 @@
             {
               "schema": "https",
               "domain": "eth.llamarpc.com"
+            },
+            {
+              "schema": "https",
+              "domain": "ethereum.drpc.org"
+            },
+            {
+              "schema": "https",
+              "domain": "rpc.flashbots.net"
             },
             {
               "schema": "https",

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
 import { WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
 import { callThisAppService } from '@/lib/json-rpc';
@@ -70,14 +70,9 @@ const privateKeyForm = reactive({
 const transferForm = reactive({
   to: '',
   amount: '',
-  passphrase: '',
 });
 const signForm = reactive({
   message: '',
-  passphrase: '',
-});
-const backupForm = reactive({
-  passphrase: '',
 });
 const passwordForm = reactive({
   currentPassphrase: '',
@@ -89,6 +84,14 @@ const resetForm = reactive({
   confirmText: '',
 });
 const settingsForm = reactive<WalletSettings>({ ...defaultSettings });
+const passwordInput = ref<HTMLInputElement | null>(null);
+const passwordDialog = reactive({
+  open: false,
+  title: '',
+  actionLabel: 'Continue',
+  passphrase: '',
+});
+let passwordDialogResolve: ((value: string | null) => void) | undefined;
 
 const selectedNetwork = computed(() => (
   state.value.networks.find(network => network.key === selectedNetworkKey.value)
@@ -220,6 +223,39 @@ function setError(err: unknown): void {
 function clearError(): void {
   errorMessage.value = '';
   errorDetails.value = '';
+}
+
+async function requestWalletPassword(title: string, actionLabel: string): Promise<string | null> {
+  if (passwordDialogResolve) {
+    passwordDialogResolve(null);
+  }
+  passwordDialog.title = title;
+  passwordDialog.actionLabel = actionLabel;
+  passwordDialog.passphrase = '';
+  passwordDialog.open = true;
+  await nextTick();
+  passwordInput.value?.focus();
+  return new Promise(resolve => {
+    passwordDialogResolve = resolve;
+  });
+}
+
+function closePasswordDialog(): void {
+  passwordDialog.open = false;
+  passwordDialog.passphrase = '';
+  passwordDialogResolve?.(null);
+  passwordDialogResolve = undefined;
+}
+
+function submitPasswordDialog(): void {
+  if (!passwordDialog.passphrase) {
+    return;
+  }
+  const passphrase = passwordDialog.passphrase;
+  passwordDialog.open = false;
+  passwordDialog.passphrase = '';
+  passwordDialogResolve?.(passphrase);
+  passwordDialogResolve = undefined;
 }
 
 async function serviceCall<TRequest, TResponse>(method: string, payload: TRequest): Promise<TResponse> {
@@ -392,6 +428,14 @@ async function transfer(): Promise<void> {
   if (!selectedAccountId.value) {
     return;
   }
+  let passphrase: string | undefined;
+  if (transferNeedsPassword.value) {
+    const confirmedPassphrase = await requestWalletPassword('Confirm Transfer', 'Send');
+    if (!confirmedPassphrase) {
+      return;
+    }
+    passphrase = confirmedPassphrase;
+  }
   await run(async () => {
     const result = await serviceCall<
       { accountId: string; to: string; amount: string; tokenId?: string; passphrase?: string },
@@ -401,9 +445,8 @@ async function transfer(): Promise<void> {
       to: transferForm.to,
       amount: transferForm.amount,
       tokenId: selectedTokenId.value || undefined,
-      passphrase: transferNeedsPassword.value ? transferForm.passphrase : undefined,
+      passphrase,
     });
-    transferForm.passphrase = '';
     lastTransfer.value = result;
     await refresh();
     setResult(`Transfer submitted: ${result.signature}`);
@@ -414,6 +457,14 @@ async function signMessage(): Promise<void> {
   if (!selectedAccountId.value) {
     return;
   }
+  let passphrase: string | undefined;
+  if (signMessageNeedsPassword.value) {
+    const confirmedPassphrase = await requestWalletPassword('Confirm Message Signing', 'Sign');
+    if (!confirmedPassphrase) {
+      return;
+    }
+    passphrase = confirmedPassphrase;
+  }
   await run(async () => {
     const result = await serviceCall<
       { accountId: string; message: string; passphrase?: string },
@@ -421,9 +472,8 @@ async function signMessage(): Promise<void> {
     >('signMessage', {
       accountId: selectedAccountId.value,
       message: signForm.message,
-      passphrase: signMessageNeedsPassword.value ? signForm.passphrase : undefined,
+      passphrase,
     });
-    signForm.passphrase = '';
     lastSignature.value = JSON.stringify(result, null, 2);
     setResult('Message signed.');
   });
@@ -433,17 +483,20 @@ async function revealRecoveryPhrase(): Promise<void> {
   if (!selectedAccountId.value) {
     return;
   }
+  const passphrase = await requestWalletPassword('Show Recovery Phrase', 'Show phrase');
+  if (!passphrase) {
+    return;
+  }
   await run(async () => {
     const result = await serviceCall<
       { accountId: string; passphrase: string },
       RevealRecoveryPhraseResult
     >('revealRecoveryPhrase', {
       accountId: selectedAccountId.value,
-      passphrase: backupForm.passphrase,
+      passphrase,
     });
     recoveryPhrase.value = result.mnemonic;
     recoveryPath.value = result.derivationPath ?? '';
-    backupForm.passphrase = '';
     setResult('Recovery phrase unlocked.');
   });
 }
@@ -730,13 +783,9 @@ onMounted(async () => {
               <span>Amount</span>
               <input v-model.trim="transferForm.amount" autocomplete="off" inputmode="decimal" />
             </label>
-            <label v-if="transferNeedsPassword">
-              <span>Confirm wallet password</span>
-              <input v-model="transferForm.passphrase" autocomplete="current-password" type="password" />
-            </label>
             <button
               class="btn btn--primary"
-              :disabled="busy || !selectedAccount || !transferForm.to || !transferForm.amount || (transferNeedsPassword && !transferForm.passphrase)"
+              :disabled="busy || !selectedAccount || !transferForm.to || !transferForm.amount"
               @click="transfer"
             >
               Send
@@ -754,13 +803,9 @@ onMounted(async () => {
               placeholder="Message content"
               spellcheck="false"
             />
-            <label v-if="signMessageNeedsPassword">
-              <span>Confirm wallet password</span>
-              <input v-model="signForm.passphrase" autocomplete="current-password" type="password" />
-            </label>
             <button
               class="btn btn--primary"
-              :disabled="busy || !selectedAccount || !signForm.message || (signMessageNeedsPassword && !signForm.passphrase)"
+              :disabled="busy || !selectedAccount || !signForm.message"
               @click="signMessage"
             >
               Sign
@@ -772,14 +817,10 @@ onMounted(async () => {
         <article class="panel">
           <div class="panel__header">
             <h2>Backup</h2>
-            <button class="btn btn--secondary" :disabled="busy || !selectedAccount || !backupForm.passphrase" @click="revealRecoveryPhrase">
+            <button class="btn btn--secondary" :disabled="busy || !selectedAccount" @click="revealRecoveryPhrase">
               Show phrase
             </button>
           </div>
-          <label>
-            <span>Confirm wallet password</span>
-            <input v-model="backupForm.passphrase" autocomplete="current-password" type="password" />
-          </label>
           <div v-if="recoveryPhrase" class="recovery-box">
             <span>Recovery phrase</span>
             <code>{{ recoveryPhrase }}</code>
@@ -900,6 +941,42 @@ onMounted(async () => {
         :details="errorDetails"
         @close="clearError"
       />
+
+      <div v-if="passwordDialog.open" class="modal-backdrop" @click.self="closePasswordDialog">
+        <section class="password-modal" role="dialog" aria-modal="true" :aria-labelledby="'password-dialog-title'">
+          <div class="panel__header">
+            <h2 id="password-dialog-title">{{ passwordDialog.title }}</h2>
+            <button
+              class="error-notice__close"
+              :disabled="busy"
+              title="Close"
+              aria-label="Close"
+              @click="closePasswordDialog"
+            >
+              ×
+            </button>
+          </div>
+          <label>
+            <span>Wallet password</span>
+            <input
+              ref="passwordInput"
+              v-model="passwordDialog.passphrase"
+              autocomplete="current-password"
+              type="password"
+              @keyup.enter="submitPasswordDialog"
+              @keyup.esc="closePasswordDialog"
+            />
+          </label>
+          <div class="modal-actions">
+            <button class="btn btn--secondary" :disabled="busy" @click="closePasswordDialog">
+              Cancel
+            </button>
+            <button class="btn btn--primary" :disabled="busy || !passwordDialog.passphrase" @click="submitPasswordDialog">
+              {{ passwordDialog.actionLabel }}
+            </button>
+          </div>
+        </section>
+      </div>
     </template>
   </main>
 </template>
