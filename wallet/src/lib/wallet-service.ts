@@ -114,8 +114,13 @@ function normalizePublicState(state: WalletPublicState | undefined): WalletPubli
   if (!state) {
     return undefined;
   }
+  const tokensById = new Map([
+    ...DEFAULT_TOKENS.map(token => [token.id, token] as const),
+    ...(state.tokens ?? []).map(token => [token.id, token] as const),
+  ]);
   return {
     ...state,
+    tokens: Array.from(tokensById.values()) as TokenConfig[],
     history: state.history ?? [],
     settings: {
       ...DEFAULT_SETTINGS,

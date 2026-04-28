@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
-import { WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
+import { DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
 import { callThisAppService } from '@/lib/json-rpc';
 import { shortAddress } from '@/lib/format';
 import { openJsonStore } from '@/lib/storage';
@@ -41,7 +41,6 @@ const state = ref<WalletPublicState>({
 const selectedAccountId = ref('');
 const selectedTokenId = ref('');
 const busy = ref(false);
-const message = ref('');
 const errorMessage = ref('');
 const errorDetails = ref('');
 const activeTab = ref<'home' | 'create' | 'settings' | 'history'>('home');
@@ -49,12 +48,9 @@ const generatedMnemonic = ref('');
 const balanceByKey = ref<Record<string, BalanceResult>>({});
 const balanceErrors = ref<Record<string, string>>({});
 const balancesLoading = ref(false);
-const balancesUpdatedAt = ref('');
 const lastTransfer = ref<TransferResult | null>(null);
 const lastSignature = ref('');
 const selectedNetworkKey = ref('');
-const recoveryPhrase = ref('');
-const recoveryPath = ref('');
 
 const vaultForm = reactive({
   passphrase: '',
@@ -93,6 +89,11 @@ const passwordDialog = reactive({
   title: '',
   actionLabel: 'Continue',
   passphrase: '',
+});
+const backupDialog = reactive({
+  open: false,
+  phrase: '',
+  path: '',
 });
 let passwordDialogResolve: ((value: string | null) => void) | undefined;
 let balanceRefreshTimer: number | undefined;
@@ -156,8 +157,7 @@ const passwordConfirmMismatch = computed(() => (
 const transferNeedsPassword = computed(() => state.value.settings.requirePasswordForTransfers);
 const signMessageNeedsPassword = computed(() => state.value.settings.requirePasswordForMessageSigning);
 
-function setResult(text: string): void {
-  message.value = text;
+function setResult(_text: string): void {
   errorMessage.value = '';
   errorDetails.value = '';
 }
@@ -233,7 +233,6 @@ function humanMessage(err: unknown): string {
 function setError(err: unknown): void {
   errorMessage.value = humanMessage(err);
   errorDetails.value = stableDetails(err);
-  message.value = '';
 }
 
 function clearError(): void {
@@ -294,11 +293,15 @@ function syncSettingsForm(): void {
 }
 
 function normalizePublicState(value: WalletPublicState | undefined): WalletPublicState {
+  const tokensById = new Map([
+    ...DEFAULT_TOKENS.map(token => [token.id, token] as const),
+    ...(value?.tokens ?? []).map(token => [token.id, token] as const),
+  ]);
   return {
     version: 1,
     accounts: value?.accounts ?? [],
     networks: value?.networks ?? [],
-    tokens: value?.tokens ?? [],
+    tokens: Array.from(tokensById.values()) as TokenConfig[],
     history: value?.history ?? [],
     settings: {
       ...defaultSettings,
@@ -341,7 +344,7 @@ async function loadInitialStateWithoutRpc(): Promise<void> {
 
 async function refresh(): Promise<void> {
   status.value = await serviceCall<void, WalletStatus>('status', undefined as void);
-  state.value = await serviceCall<void, WalletPublicState>('getPublicState', undefined as void);
+  state.value = normalizePublicState(await serviceCall<void, WalletPublicState>('getPublicState', undefined as void));
   syncSettingsForm();
   selectDefaultNetworkAndAccount();
 }
@@ -366,7 +369,7 @@ async function unlockOrCreateVault(): Promise<void> {
     vaultForm.confirmPassphrase = '';
     await refresh();
     await refreshSelectedBalances();
-    setResult(status.value.exists ? 'Wallet unlocked.' : 'Wallet vault created.');
+    setResult('');
   });
 }
 
@@ -377,9 +380,11 @@ async function lock(): Promise<void> {
     selectedTokenId.value = '';
     balanceByKey.value = {};
     balanceErrors.value = {};
-    balancesUpdatedAt.value = '';
+    backupDialog.open = false;
+    backupDialog.phrase = '';
+    backupDialog.path = '';
     activeTab.value = 'home';
-    setResult('Wallet locked.');
+    setResult('');
   });
 }
 
@@ -486,7 +491,6 @@ async function refreshSelectedBalances(): Promise<void> {
       ...balanceErrors.value,
       ...failed,
     };
-    balancesUpdatedAt.value = new Date().toLocaleTimeString();
     balancesLoading.value = false;
     if (balanceRefreshQueued) {
       balanceRefreshQueued = false;
@@ -567,10 +571,17 @@ async function revealRecoveryPhrase(): Promise<void> {
       accountId: selectedAccountId.value,
       passphrase,
     });
-    recoveryPhrase.value = result.mnemonic;
-    recoveryPath.value = result.derivationPath ?? '';
-    setResult('Recovery phrase unlocked.');
+    backupDialog.phrase = result.mnemonic;
+    backupDialog.path = result.derivationPath ?? '';
+    backupDialog.open = true;
+    setResult('');
   });
+}
+
+function closeBackupDialog(): void {
+  backupDialog.open = false;
+  backupDialog.phrase = '';
+  backupDialog.path = '';
 }
 
 async function changePassphrase(): Promise<void> {
@@ -600,10 +611,8 @@ async function resetVault(): Promise<void> {
     selectedTokenId.value = '';
     balanceByKey.value = {};
     balanceErrors.value = {};
-    balancesUpdatedAt.value = '';
     generatedMnemonic.value = '';
-    recoveryPhrase.value = '';
-    recoveryPath.value = '';
+    closeBackupDialog();
     resetForm.passphrase = '';
     resetForm.confirmText = '';
     setResult('Wallet reset.');
@@ -637,8 +646,7 @@ watch(selectedNetworkKey, () => {
 });
 watch(selectedAccountId, () => {
   selectedTokenId.value = '';
-  recoveryPhrase.value = '';
-  recoveryPath.value = '';
+  closeBackupDialog();
   void refreshSelectedBalances();
 });
 watch(() => compatibleTokens.value.map(token => token.id).join(','), () => {
@@ -759,11 +767,14 @@ onUnmounted(() => {
         </button>
       </nav>
 
-      <section v-if="activeTab === 'create'" class="tab-surface grid grid--setup">
-        <label class="add-name-field">
-          <span>Account name</span>
-          <input v-model.trim="addForm.accountName" autocomplete="off" />
-        </label>
+      <section v-if="activeTab === 'create'" class="tab-surface add-surface">
+        <div class="add-name-row">
+          <label class="add-name-field">
+            <span>Account name</span>
+            <input v-model.trim="addForm.accountName" autocomplete="off" />
+          </label>
+        </div>
+        <div class="grid grid--setup">
         <article class="panel">
           <div class="panel__header">
             <h2>Generate New Account</h2>
@@ -819,6 +830,7 @@ onUnmounted(() => {
             Import private key
           </button>
         </article>
+        </div>
       </section>
 
       <section v-else-if="activeTab === 'home'" class="tab-surface home-grid">
@@ -845,8 +857,6 @@ onUnmounted(() => {
               <span aria-hidden="true">⧉</span>
             </button>
           </div>
-
-          <small v-if="balancesUpdatedAt">Updated {{ balancesUpdatedAt }}</small>
         </article>
 
         <article class="panel token-balances-panel">
@@ -930,16 +940,8 @@ onUnmounted(() => {
         <article class="panel">
           <div class="panel__header">
             <h2>Backup</h2>
-            <button class="btn btn--secondary" :disabled="busy || !selectedAccount" @click="revealRecoveryPhrase">
-              Show phrase
-            </button>
-          </div>
-          <div v-if="recoveryPhrase" class="recovery-box">
-            <span>Recovery phrase</span>
-            <code>{{ recoveryPhrase }}</code>
-            <small v-if="recoveryPath">{{ recoveryPath }}</small>
-            <button class="btn btn--secondary" :disabled="busy" @click="copy(recoveryPhrase)">
-              Copy phrase
+            <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="revealRecoveryPhrase">
+              Show backup phrase
             </button>
           </div>
         </article>
@@ -1045,11 +1047,8 @@ onUnmounted(() => {
         </article>
       </section>
 
-      <footer v-if="!errorMessage" class="status-bar">
-        {{ message || 'Wallet signer service is ready.' }}
-      </footer>
       <ErrorNotice
-        v-else
+        v-if="errorMessage"
         :message="errorMessage"
         :details="errorDetails"
         @close="clearError"
@@ -1086,6 +1085,36 @@ onUnmounted(() => {
             </button>
             <button class="btn btn--primary" :disabled="busy || !passwordDialog.passphrase" @click="submitPasswordDialog">
               {{ passwordDialog.actionLabel }}
+            </button>
+          </div>
+        </section>
+      </div>
+
+      <div v-if="backupDialog.open" class="modal-backdrop" @click.self="closeBackupDialog">
+        <section class="password-modal backup-modal" role="dialog" aria-modal="true" :aria-labelledby="'backup-dialog-title'">
+          <div class="panel__header">
+            <h2 id="backup-dialog-title">Backup Phrase</h2>
+            <button
+              class="error-notice__close"
+              :disabled="busy"
+              title="Close"
+              aria-label="Close"
+              @click="closeBackupDialog"
+            >
+              ×
+            </button>
+          </div>
+          <div class="recovery-box">
+            <span>Recovery phrase</span>
+            <code>{{ backupDialog.phrase }}</code>
+            <small v-if="backupDialog.path">{{ backupDialog.path }}</small>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn--secondary" :disabled="busy" @click="copy(backupDialog.phrase)">
+              Copy phrase
+            </button>
+            <button class="btn btn--primary" :disabled="busy" @click="closeBackupDialog">
+              Close
             </button>
           </div>
         </section>

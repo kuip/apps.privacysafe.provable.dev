@@ -29,20 +29,16 @@ textarea {
   position: fixed;
   inset: 0;
   overflow: hidden;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--color-border-block-primary-default, #d7dee7) 30%, transparent) 1px, transparent 1px),
-    linear-gradient(color-mix(in srgb, var(--color-border-block-primary-default, #d7dee7) 26%, transparent) 1px, transparent 1px),
-    var(--color-bg-block-primary-default, #f5f7fa);
-  background-size: 28px 28px;
+  background-color: var(--color-bg-block-primary-default, #f5f7fa);
 }
 
 .shell {
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: var(--spacing-m, 16px);
   padding: var(--spacing-ml, 24px);
-  overflow: auto;
+  overflow: hidden;
   overscroll-behavior: contain;
 }
 
@@ -172,6 +168,7 @@ small {
 .panel,
 .subpanel {
   min-width: 0;
+  align-self: start;
   display: grid;
   gap: var(--spacing-s, 8px);
   border: 1px solid var(--color-border-block-primary-default, #d7dee7);
@@ -310,6 +307,10 @@ textarea:focus {
   color: #ffffff;
 }
 
+.btn--muted-danger {
+  opacity: 0.5;
+}
+
 .btn:hover:not(:disabled),
 .icon-action:hover:not(:disabled),
 .lock-toggle:hover:not(:disabled),
@@ -370,12 +371,19 @@ textarea:focus {
 
 .tab-surface {
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  padding-bottom: var(--spacing-m, 16px);
 }
 
-.add-name-field {
-  grid-column: 1 / -1;
-  align-self: start;
+.add-surface {
+  display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: var(--spacing-s, 8px);
+}
+
+.add-name-row {
+  max-width: 420px;
 }
 
 .grid--setup .panel {
@@ -408,6 +416,8 @@ textarea:focus {
 
 .home-grid {
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: var(--spacing-m, 16px);
 }
 
@@ -489,6 +499,7 @@ textarea:focus {
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: var(--spacing-m, 16px);
 }
 
@@ -576,18 +587,6 @@ pre {
   padding: 0;
 }
 
-.status-bar {
-  min-height: 36px;
-  display: flex;
-  align-items: center;
-  padding: 0 var(--spacing-m, 16px);
-  border: 1px solid var(--color-border-block-primary-default, #d7dee7);
-  border-radius: var(--spacing-xs, 4px);
-  background-color: var(--color-bg-block-primary-default, #ffffff);
-  color: var(--color-text-control-secondary-default, #64748b);
-  font-size: 13px;
-}
-
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -607,6 +606,10 @@ pre {
   border-radius: var(--spacing-s, 8px);
   background-color: var(--color-bg-block-primary-default, #ffffff);
   box-shadow: 0 18px 48px rgb(15 23 42 / 22%);
+}
+
+.backup-modal {
+  width: min(560px, calc(100vw - 48px));
 }
 
 .modal-actions {
