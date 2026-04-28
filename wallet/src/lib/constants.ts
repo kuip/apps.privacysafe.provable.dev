@@ -23,10 +23,10 @@ export const DEFAULT_NETWORKS = {
     chain: 'solana',
     name: 'Solana',
     nativeSymbol: 'SOL',
-    rpcUrl: 'https://api.mainnet-beta.solana.com',
+    rpcUrl: 'https://solana-rpc.publicnode.com',
     rpcUrls: [
-      'https://api.mainnet-beta.solana.com',
       'https://solana-rpc.publicnode.com',
+      'https://api.mainnet-beta.solana.com',
     ],
   },
 } as const;

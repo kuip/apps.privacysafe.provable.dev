@@ -88,7 +88,7 @@ const DEFAULT_SETTINGS: WalletSettings = {
   requirePasswordForMessageSigning: false,
   requirePasswordForTransactionSigning: true,
 };
-const RPC_BALANCE_IMPL = 'wallet-rpc-direct-fetch-v2';
+const RPC_REQUEST_TIMEOUT_MS = 12000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -270,20 +270,14 @@ type JsonRpcResponse<T> = {
   };
 };
 
-type SolanaTokenAccountsResult = {
+type SolanaAccountInfoResult = {
+  value: unknown | null;
+};
+
+type SolanaTokenBalanceResult = {
   value: {
-    account: {
-      data: {
-        parsed?: {
-          info?: {
-            tokenAmount?: {
-              amount?: string;
-            };
-          };
-        };
-      };
-    };
-  }[];
+    amount?: string;
+  };
 };
 
 type SolanaBalanceResult = {
@@ -301,7 +295,6 @@ export class WalletService {
     const syncedStore = await openJsonStore('synced');
     this.vaultFile = await localStore.read<WalletVaultFile>(WALLET_VAULT_PATH);
     this.publicState = normalizePublicState(await syncedStore.read<WalletPublicState>(WALLET_STATE_PATH));
-    await w3n.log?.('info', `Wallet balance RPC implementation: ${RPC_BALANCE_IMPL}`);
   }
 
   async status(): Promise<WalletStatus> {
@@ -785,7 +778,7 @@ export class WalletService {
       : typeof err === 'object' && err
         ? JSON.stringify(err)
         : String(err);
-    return /Failed to fetch|network|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|HTTP (408|425|429|5\d\d)|Too many connections|rate limit/i.test(text);
+    return /Failed to fetch|network|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|timed out|timeout|HTTP (403|408|425|429|5\d\d)|Too many connections|rate limit|forbidden/i.test(text);
   }
 
   private async withRpcFallback<T>(
@@ -819,6 +812,8 @@ export class WalletService {
     contentType = 'application/json',
   ): Promise<T> {
     let response: Response;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
     try {
       response = await fetch(rpcUrl, {
         method: 'POST',
@@ -833,12 +828,19 @@ export class WalletService {
           params,
         }),
         cache: 'no-store',
+        signal: controller.signal,
       });
     } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`RPC ${method} timed out for ${rpcUrl} after ${RPC_REQUEST_TIMEOUT_MS}ms.`);
+      }
       throw new Error(`RPC ${method} fetch failed for ${rpcUrl}: ${errorMessage(err)}`);
+    } finally {
+      window.clearTimeout(timeout);
     }
     if (!response.ok) {
-      throw new Error(`RPC ${method} failed for ${rpcUrl} with HTTP ${response.status}.`);
+      const body = await response.text().catch(() => '');
+      throw new Error(`RPC ${method} failed for ${rpcUrl} with HTTP ${response.status}${body ? `: ${body.slice(0, 240)}` : ''}.`);
     }
     const payload = await response.json() as JsonRpcResponse<T>;
     if (payload.error) {
@@ -903,15 +905,26 @@ export class WalletService {
 
   private async getSolanaTokenBalance(account: WalletAccount, token: TokenConfig): Promise<BalanceResult> {
     return this.withRpcFallback('solana', this.solanaRpcUrls(), async rpcUrl => {
-      const accounts = await this.jsonRpc<SolanaTokenAccountsResult>(rpcUrl, 'getTokenAccountsByOwner', [
-        account.address,
-        { mint: token.address },
-        { encoding: 'jsonParsed' },
+      const tokenAccount = await getAssociatedTokenAddress(
+        new PublicKey(token.address),
+        new PublicKey(account.address),
+      );
+      const accountInfo = await this.jsonRpc<SolanaAccountInfoResult>(rpcUrl, 'getAccountInfo', [
+        tokenAccount.toBase58(),
+        { encoding: 'base64' },
       ]);
-      const raw = accounts.value.reduce((sum, item) => {
-        const amount = item.account.data.parsed?.info?.tokenAmount?.amount ?? '0';
-        return sum + BigInt(amount);
-      }, 0n);
+      if (!accountInfo.value) {
+        return {
+          accountId: account.id,
+          symbol: token.symbol,
+          raw: '0',
+          formatted: formatUnits(0n, token.decimals),
+        };
+      }
+      const balance = await this.jsonRpc<SolanaTokenBalanceResult>(rpcUrl, 'getTokenAccountBalance', [
+        tokenAccount.toBase58(),
+      ]);
+      const raw = BigInt(balance.value.amount ?? '0');
       return {
         accountId: account.id,
         symbol: token.symbol,
