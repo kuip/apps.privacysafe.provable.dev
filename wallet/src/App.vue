@@ -650,6 +650,9 @@ watch(selectedAccountId, () => {
   void refreshSelectedBalances();
 });
 watch(() => compatibleTokens.value.map(token => token.id).join(','), () => {
+  if (selectedTokenId.value && !compatibleTokens.value.some(token => token.id === selectedTokenId.value)) {
+    selectedTokenId.value = '';
+  }
   void refreshSelectedBalances();
 });
 
@@ -892,7 +895,7 @@ onUnmounted(() => {
             <label>
               <span>Asset</span>
               <select v-model="selectedTokenId" :disabled="!selectedAccount">
-                <option value="">{{ selectedNetwork?.nativeSymbol || 'Asset' }}</option>
+                <option value="">{{ selectedNetwork?.nativeSymbol || 'Native coin' }}</option>
                 <option v-for="token in compatibleTokens" :key="token.id" :value="token.id">
                   {{ token.symbol }}
                 </option>
