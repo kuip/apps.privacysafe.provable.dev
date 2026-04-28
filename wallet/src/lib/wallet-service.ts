@@ -864,7 +864,6 @@ export class WalletService {
         rpcUrl,
         'eth_getBalance',
         [account.address, 'latest'],
-        'text/plain;charset=UTF-8',
       );
       const raw = BigInt(rawHex);
       return {
@@ -896,7 +895,6 @@ export class WalletService {
         rpcUrl,
         'eth_call',
         [{ to: token.address, data }, 'latest'],
-        'text/plain;charset=UTF-8',
       );
       const [raw] = ERC20_INTERFACE.decodeFunctionResult('balanceOf', rawHex) as unknown as [bigint];
       return {
