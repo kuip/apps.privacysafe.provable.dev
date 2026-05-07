@@ -86,7 +86,7 @@ textarea {
 
 .topbar {
   display: grid;
-  grid-template-columns: auto minmax(320px, 1fr) auto;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(320px, 1fr);
   align-items: center;
   gap: var(--spacing-ml, 24px);
   padding-bottom: var(--spacing-m, 16px);
@@ -98,6 +98,7 @@ textarea {
   align-items: center;
   gap: var(--spacing-m, 16px);
   min-width: 0;
+  width: 100%;
 }
 
 .brand__logo {
@@ -341,6 +342,7 @@ textarea:focus {
   display: grid;
   place-items: center;
   font-size: 18px;
+  margin-left: auto;
 }
 
 .tabbar {
@@ -362,6 +364,11 @@ textarea:focus {
   padding: 0 var(--spacing-m, 16px);
   font-size: 13px;
   font-weight: 700;
+}
+
+.tab-icon {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .tab-btn[data-active='true'] {
@@ -708,6 +715,27 @@ pre {
   }
 
   .tabbar {
-    overflow-x: auto;
+    overflow-x: hidden;
+  }
+}
+
+@media (max-width: 560px) {
+  .tabbar {
+    gap: 4px;
+  }
+
+  .tab-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 56px;
+    padding: 0;
+  }
+
+  .tab-icon {
+    font-size: 32px;
+  }
+
+  .tab-label {
+    display: none;
   }
 }

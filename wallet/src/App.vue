@@ -724,6 +724,9 @@ onUnmounted(() => {
         <div class="brand">
           <img alt="Wallet" class="brand__logo" src="/logo.svg" />
           <h1>Wallet</h1>
+          <button class="lock-toggle" :disabled="busy" title="Lock wallet" aria-label="Lock wallet" @click="lock">
+            <span aria-hidden="true">🔓</span>
+          </button>
         </div>
 
         <div class="header-selectors">
@@ -746,27 +749,24 @@ onUnmounted(() => {
           </label>
         </div>
 
-        <button class="lock-toggle" :disabled="busy" title="Lock wallet" aria-label="Lock wallet" @click="lock">
-          <span aria-hidden="true">🔓</span>
-        </button>
       </header>
 
       <nav class="tabbar" aria-label="Wallet sections">
-        <button class="tab-btn" :data-active="activeTab === 'home'" @click="activeTab = 'home'">
-          <span aria-hidden="true">⌂</span>
-          <span>Home</span>
+        <button class="tab-btn" :data-active="activeTab === 'home'" aria-label="Home" @click="activeTab = 'home'">
+          <span class="tab-icon" aria-hidden="true">⌂</span>
+          <span class="tab-label">Home</span>
         </button>
-        <button class="tab-btn" :data-active="activeTab === 'create'" @click="activeTab = 'create'">
-          <span aria-hidden="true">+</span>
-          <span>Add</span>
+        <button class="tab-btn" :data-active="activeTab === 'create'" aria-label="Add account" @click="activeTab = 'create'">
+          <span class="tab-icon" aria-hidden="true">+</span>
+          <span class="tab-label">Add</span>
         </button>
-        <button class="tab-btn" :data-active="activeTab === 'history'" @click="activeTab = 'history'">
-          <span aria-hidden="true">◷</span>
-          <span>History</span>
+        <button class="tab-btn" :data-active="activeTab === 'history'" aria-label="History" @click="activeTab = 'history'">
+          <span class="tab-icon" aria-hidden="true">◷</span>
+          <span class="tab-label">History</span>
         </button>
-        <button class="tab-btn" :data-active="activeTab === 'settings'" @click="activeTab = 'settings'">
-          <span aria-hidden="true">⚙</span>
-          <span>Settings</span>
+        <button class="tab-btn" :data-active="activeTab === 'settings'" aria-label="Settings" @click="activeTab = 'settings'">
+          <span class="tab-icon" aria-hidden="true">⚙</span>
+          <span class="tab-label">Settings</span>
         </button>
       </nav>
 

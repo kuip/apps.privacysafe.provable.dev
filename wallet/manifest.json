@@ -10,7 +10,8 @@
       "startedBy": "user",
       "formFactor": [
         "desktop",
-        "tablet"
+        "tablet",
+        "phone"
       ],
       "capsRequested": {
         "appRPC": [
@@ -157,7 +158,8 @@
       "component": "/index.html",
       "formFactor": [
         "desktop",
-        "tablet"
+        "tablet",
+        "phone"
       ]
     }
   ],
