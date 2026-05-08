@@ -141,18 +141,29 @@ export interface TransferResult {
   accountId: string;
   chain: Chain;
   signature: string;
+  status: TransactionStatus;
+  blockNumber?: number;
+  confirmedAt?: string;
   explorerUrl?: string;
 }
+
+export type TransactionStatus = 'pending' | 'success' | 'failed' | 'not_included';
 
 export interface TransactionHistoryEntry {
   id: string;
   accountId: string;
   chain: Chain;
   networkKey: string;
+  status?: TransactionStatus;
   assetSymbol: string;
   amount: string;
+  from?: string;
   to: string;
   signature: string;
+  txHash?: string;
+  value?: string;
+  blockNumber?: number;
+  confirmedAt?: string;
   explorerUrl?: string;
   createdAt: string;
 }

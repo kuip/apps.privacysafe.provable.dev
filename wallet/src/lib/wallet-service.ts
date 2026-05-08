@@ -90,6 +90,7 @@ const DEFAULT_SETTINGS: WalletSettings = {
   enableDevelopmentNetworks: false,
 };
 const RPC_REQUEST_TIMEOUT_MS = 12000;
+const TX_CONFIRM_TIMEOUT_MS = 120000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -263,6 +264,22 @@ function formatUnits(raw: bigint, decimals: number): string {
 
 function parseUnits(value: string, decimals: number): bigint {
   return ethers.parseUnits(value, decimals);
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>(resolve => {
+        timeout = setTimeout(() => resolve(undefined), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function ethereumExplorer(txHash: string): string {
@@ -746,13 +763,19 @@ export class WalletService {
       chain: account.chain,
       networkKey: network.key,
       assetSymbol,
+      status: result.status,
       amount: request.amount,
+      from: account.address,
       to: request.to,
       signature: result.signature,
+      txHash: result.signature,
+      value: `${request.amount} ${assetSymbol}`,
+      blockNumber: result.blockNumber,
+      confirmedAt: result.confirmedAt,
       explorerUrl: result.explorerUrl,
       createdAt: nowIso(),
     };
-    this.vault.history = [entry, ...(this.vault.history ?? [])].slice(0, 100);
+    this.vault.history = [entry, ...(this.vault.history ?? [])].slice(0, 1000);
     await this.persist();
   }
 
@@ -981,10 +1004,16 @@ export class WalletService {
       to: request.to,
       value: parseUnits(request.amount, 18),
     });
+    const receipt = await this.waitForEthereumReceipt(tx);
     return {
       accountId: account.id,
       chain: account.chain,
       signature: tx.hash,
+      status: receipt
+        ? receipt.status === 1 ? 'success' : 'failed'
+        : 'not_included',
+      blockNumber: receipt?.blockNumber,
+      confirmedAt: receipt ? nowIso() : undefined,
       explorerUrl: ethereumExplorerFor(network, tx.hash),
     };
   }
@@ -1000,10 +1029,16 @@ export class WalletService {
     const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
     const contract = new ethers.Contract(token.address, ERC20_ABI, wallet);
     const tx = await contract.transfer(request.to, parseUnits(request.amount, token.decimals));
+    const receipt = await this.waitForEthereumReceipt(tx);
     return {
       accountId: account.id,
       chain: account.chain,
       signature: tx.hash,
+      status: receipt
+        ? receipt.status === 1 ? 'success' : 'failed'
+        : 'not_included',
+      blockNumber: receipt?.blockNumber,
+      confirmedAt: receipt ? nowIso() : undefined,
       explorerUrl: ethereumExplorerFor(network, tx.hash),
     };
   }
@@ -1019,10 +1054,13 @@ export class WalletService {
       lamports: Number(parseUnits(request.amount, 9)),
     }));
     const signature = await connection.sendTransaction(transaction, [keypair]);
+    const confirmation = await this.waitForSolanaConfirmation(connection, signature);
     return {
       accountId: account.id,
       chain: account.chain,
       signature,
+      status: confirmation.status,
+      confirmedAt: confirmation.confirmedAt,
       explorerUrl: solanaExplorer(signature, network),
     };
   }
@@ -1060,11 +1098,49 @@ export class WalletService {
       parseUnits(request.amount, token.decimals),
     ));
     const signature = await connection.sendTransaction(transaction, [keypair]);
+    const confirmation = await this.waitForSolanaConfirmation(connection, signature);
     return {
       accountId: account.id,
       chain: account.chain,
       signature,
+      status: confirmation.status,
+      confirmedAt: confirmation.confirmedAt,
       explorerUrl: solanaExplorer(signature, network),
     };
+  }
+
+  private async waitForEthereumReceipt(
+    tx: ethers.TransactionResponse,
+  ): Promise<ethers.TransactionReceipt | undefined> {
+    try {
+      return await withTimeout(tx.wait(1), TX_CONFIRM_TIMEOUT_MS) ?? undefined;
+    } catch (err) {
+      const receipt = (err as { receipt?: ethers.TransactionReceipt }).receipt;
+      if (receipt) {
+        return receipt;
+      }
+      throw err;
+    }
+  }
+
+  private async waitForSolanaConfirmation(
+    connection: Connection,
+    signature: string,
+  ): Promise<{ status: TransferResult['status']; confirmedAt?: string }> {
+    try {
+      const confirmation = await withTimeout(
+        connection.confirmTransaction(signature, 'confirmed'),
+        TX_CONFIRM_TIMEOUT_MS,
+      );
+      if (!confirmation) {
+        return { status: 'not_included' };
+      }
+      return {
+        status: confirmation.value.err ? 'failed' : 'success',
+        confirmedAt: nowIso(),
+      };
+    } catch {
+      return { status: 'not_included' };
+    }
   }
 }

@@ -12,6 +12,7 @@ import type {
   RevealRecoveryPhraseResult,
   SignMessageResult,
   TransactionHistoryEntry,
+  TransactionStatus,
   TokenConfig,
   TransferResult,
   WalletPublicState,
@@ -53,6 +54,12 @@ const balancesLoading = ref(false);
 const lastTransfer = ref<TransferResult | null>(null);
 const lastSignature = ref('');
 const selectedNetworkKey = ref('');
+const expandedHistoryId = ref('');
+const historyPage = ref(1);
+const historyPageSize = ref(10);
+const historyPageSizeOptions = [10, 50, 100] as const;
+const copyFallbackText = ref('');
+const copyFallbackField = ref<HTMLTextAreaElement | null>(null);
 
 const vaultForm = reactive({
   passphrase: '',
@@ -119,10 +126,20 @@ const selectedAccount = computed(() => (
   state.value.accounts.find(account => account.id === selectedAccountId.value)
 ));
 const historyForSelectedAccount = computed<TransactionHistoryEntry[]>(() => (
-  selectedAccountId.value
-    ? (state.value.history ?? []).filter(entry => entry.accountId === selectedAccountId.value)
-    : (state.value.history ?? [])
+  (state.value.history ?? [])
+    .filter(entry => (
+      (!selectedAccountId.value || entry.accountId === selectedAccountId.value)
+      && (!selectedNetworkKey.value || entry.networkKey === selectedNetworkKey.value)
+    ))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 ));
+const historyPageCount = computed(() => (
+  Math.max(1, Math.ceil(historyForSelectedAccount.value.length / historyPageSize.value))
+));
+const pagedHistory = computed(() => {
+  const start = (historyPage.value - 1) * historyPageSize.value;
+  return historyForSelectedAccount.value.slice(start, start + historyPageSize.value);
+});
 
 const compatibleTokens = computed<TokenConfig[]>(() => {
   const account = selectedAccount.value;
@@ -674,13 +691,53 @@ async function resetVault(): Promise<void> {
   });
 }
 
-async function copy(text: string): Promise<void> {
-  if (w3n.shell?.clipboard?.writeText) {
-    await w3n.shell.clipboard.writeText(text);
-  } else {
-    await navigator.clipboard?.writeText(text);
+async function copy(text: string | undefined): Promise<void> {
+  if (!text) {
+    return;
   }
-  setResult('Copied.');
+  const errors: unknown[] = [];
+
+  try {
+    if (w3n.shell?.clipboard?.writeText) {
+      await w3n.shell.clipboard.writeText(text, 'clipboard');
+      setResult('Copied.');
+      return;
+    }
+  } catch (err) {
+    errors.push(err);
+  }
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      setResult('Copied.');
+      return;
+    }
+  } catch (err) {
+    errors.push(err);
+  }
+
+  try {
+    copyFallbackText.value = text;
+    await nextTick();
+    const field = copyFallbackField.value;
+    if (!field) {
+      throw new Error('Clipboard fallback field is unavailable.');
+    }
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, text.length);
+    const copied = document.execCommand('copy');
+    field.setSelectionRange(0, 0);
+    field.blur();
+    if (!copied) {
+      throw new Error('Clipboard fallback copy command failed.');
+    }
+    setResult('Copied.');
+  } catch (err) {
+    const detail = [...errors, err].map(stableDetails).join('\n\n');
+    setError(new Error(`Copy to clipboard failed.${detail ? `\n\n${detail}` : ''}`));
+  }
 }
 
 async function openExternalUrl(url: string | undefined): Promise<void> {
@@ -690,6 +747,50 @@ async function openExternalUrl(url: string | undefined): Promise<void> {
   await run(async () => {
     await w3n.shell?.openURL?.(url);
   });
+}
+
+function formatHistoryTimestamp(iso: string): string {
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) {
+    return iso;
+  }
+  return new Date(time).toLocaleString(undefined, {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+}
+
+function historyStatus(entry: TransactionHistoryEntry): TransactionStatus {
+  return entry.status ?? 'not_included';
+}
+
+function historyStatusLabel(entry: TransactionHistoryEntry): string {
+  switch (historyStatus(entry)) {
+    case 'pending':
+      return 'Pending';
+    case 'success':
+      return 'Included';
+    case 'failed':
+      return 'Failed';
+    case 'not_included':
+      return 'Not included';
+  }
+}
+
+function toggleHistoryEntry(entryId: string): void {
+  expandedHistoryId.value = expandedHistoryId.value === entryId ? '' : entryId;
+}
+
+function historyValue(entry: TransactionHistoryEntry): string {
+  return entry.value ?? `${entry.amount} ${entry.assetSymbol}`;
+}
+
+function historyHash(entry: TransactionHistoryEntry): string {
+  return entry.txHash ?? entry.signature;
+}
+
+function setHistoryPage(nextPage: number): void {
+  historyPage.value = Math.min(Math.max(1, nextPage), historyPageCount.value);
 }
 
 watch(() => state.value.settings, syncSettingsForm, { deep: true });
@@ -704,8 +805,16 @@ watch(selectedNetworkKey, () => {
 });
 watch(selectedAccountId, () => {
   selectedTokenId.value = '';
+  expandedHistoryId.value = '';
   closeBackupDialog();
   void refreshSelectedBalances();
+});
+watch([selectedNetworkKey, historyPageSize], () => {
+  historyPage.value = 1;
+  expandedHistoryId.value = '';
+});
+watch(historyForSelectedAccount, () => {
+  setHistoryPage(historyPage.value);
 });
 watch(() => compatibleTokens.value.map(token => token.id).join(','), () => {
   if (selectedTokenId.value && !compatibleTokens.value.some(token => token.id === selectedTokenId.value)) {
@@ -731,6 +840,14 @@ onUnmounted(() => {
 
 <template>
   <main class="shell">
+    <textarea
+      ref="copyFallbackField"
+      v-model="copyFallbackText"
+      class="clipboard-fallback"
+      aria-hidden="true"
+      tabindex="-1"
+      readonly
+    ></textarea>
     <section v-if="!status.unlocked" class="vault-gate">
       <article class="vault-dialog">
         <img alt="Wallet" class="vault-logo" src="/logo.svg" />
@@ -792,12 +909,12 @@ onUnmounted(() => {
       </header>
 
       <nav class="tabbar" aria-label="Wallet sections">
-        <button class="tab-btn" :data-active="activeTab === 'home'" aria-label="Home" @click="activeTab = 'home'">
+        <button class="tab-btn" :data-active="activeTab === 'home'" aria-label="Account" @click="activeTab = 'home'">
           <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
             <circle cx="12" cy="8" r="4" />
             <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
           </svg>
-          <span class="tab-label">Home</span>
+          <span class="tab-label">Account</span>
         </button>
         <button class="tab-btn" :data-active="activeTab === 'create'" aria-label="Add account" @click="activeTab = 'create'">
           <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
@@ -893,16 +1010,14 @@ onUnmounted(() => {
 
       <section v-else-if="activeTab === 'home'" class="tab-surface home-grid">
         <div class="home-selectors">
-          <label>
-            <span>Network</span>
+          <label aria-label="Network">
             <select v-model="selectedNetworkKey">
               <option v-for="network in availableNetworks" :key="network.key" :value="network.key">
                 {{ network.name }}
               </option>
             </select>
           </label>
-          <label>
-            <span>Account</span>
+          <label aria-label="Account">
             <select v-model="selectedAccountId" :disabled="accountsForNetwork.length === 0">
               <option v-if="accountsForNetwork.length === 0" value="">No account</option>
               <option v-for="account in accountsForNetwork" :key="account.id" :value="account.id">
@@ -1025,25 +1140,91 @@ onUnmounted(() => {
         </article>
       </section>
 
-      <section v-else-if="activeTab === 'history'" class="tab-surface panel history-panel">
-        <div class="panel__header">
-          <h2>History</h2>
+      <section v-else-if="activeTab === 'history'" class="tab-surface history-panel">
+        <div class="history-header">
+          <div class="history-controls" v-if="historyForSelectedAccount.length">
+            <label aria-label="Rows per page">
+              <select v-model.number="historyPageSize">
+                <option v-for="size in historyPageSizeOptions" :key="size" :value="size">
+                  {{ size }}
+                </option>
+              </select>
+            </label>
+            <div class="history-pages" aria-label="History pagination">
+              <button class="icon-action" :disabled="historyPage === 1" aria-label="Previous page" @click="setHistoryPage(historyPage - 1)">
+                ‹
+              </button>
+              <span>{{ historyPage }} / {{ historyPageCount }}</span>
+              <button class="icon-action" :disabled="historyPage === historyPageCount" aria-label="Next page" @click="setHistoryPage(historyPage + 1)">
+                ›
+              </button>
+            </div>
+          </div>
         </div>
         <div v-if="historyForSelectedAccount.length" class="history-list">
-          <button
-            v-for="entry in historyForSelectedAccount"
+          <article
+            v-for="entry in pagedHistory"
             :key="entry.id"
             class="history-row"
-            :disabled="!entry.explorerUrl"
-            @click="openExternalUrl(entry.explorerUrl)"
+            :data-expanded="expandedHistoryId === entry.id"
+            :data-status="historyStatus(entry)"
           >
-            <span class="chain-mark">{{ entry.chain === 'ethereum' ? 'ETH' : 'SOL' }}</span>
-            <span>
-              <strong>{{ entry.amount }} {{ entry.assetSymbol }}</strong>
-              <small>{{ shortAddress(entry.to) }} · {{ new Date(entry.createdAt).toLocaleString() }}</small>
-            </span>
-            <code>{{ shortAddress(entry.signature) }}</code>
-          </button>
+            <button class="history-summary" type="button" @click="toggleHistoryEntry(entry.id)">
+              <span class="history-time">{{ formatHistoryTimestamp(entry.createdAt) }}</span>
+              <span class="history-status">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span>{{ historyStatusLabel(entry) }}</span>
+              </span>
+              <span class="history-main">
+                <strong>{{ historyValue(entry) }}</strong>
+                <small>{{ shortAddress(entry.to) }}</small>
+              </span>
+              <code>{{ shortAddress(historyHash(entry)) }}</code>
+            </button>
+            <div v-if="expandedHistoryId === entry.id" class="history-details">
+              <dl>
+                <div>
+                  <dt>From</dt>
+                  <dd>
+                    <code>{{ entry.from ?? selectedAccount?.address ?? '' }}</code>
+                    <button class="icon-action" :disabled="!(entry.from ?? selectedAccount?.address)" title="Copy from" aria-label="Copy from" @click="copy(entry.from ?? selectedAccount?.address ?? '')">
+                      ⧉
+                    </button>
+                  </dd>
+                </div>
+                <div>
+                  <dt>To</dt>
+                  <dd>
+                    <code>{{ entry.to }}</code>
+                    <button class="icon-action" title="Copy to" aria-label="Copy to" @click="copy(entry.to)">
+                      ⧉
+                    </button>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Value</dt>
+                  <dd>
+                    <code>{{ historyValue(entry) }}</code>
+                    <button class="icon-action" title="Copy value" aria-label="Copy value" @click="copy(historyValue(entry))">
+                      ⧉
+                    </button>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Tx hash</dt>
+                  <dd>
+                    <code>{{ historyHash(entry) }}</code>
+                    <button class="icon-action" title="Copy transaction hash" aria-label="Copy transaction hash" @click="copy(historyHash(entry))">
+                      ⧉
+                    </button>
+                  </dd>
+                </div>
+              </dl>
+              <button v-if="entry.explorerUrl" class="btn btn--secondary" @click="openExternalUrl(entry.explorerUrl)">
+                Open explorer
+              </button>
+            </div>
+          </article>
         </div>
         <p v-else class="empty">No transactions recorded for the selected account.</p>
       </section>
