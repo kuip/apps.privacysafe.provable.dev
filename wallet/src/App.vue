@@ -1170,10 +1170,19 @@ onUnmounted(() => {
             :data-status="historyStatus(entry)"
           >
             <button class="history-summary" type="button" @click="toggleHistoryEntry(entry.id)">
-              <span class="history-time">{{ formatHistoryTimestamp(entry.createdAt) }}</span>
               <span class="history-status">
-                <span class="status-dot" aria-hidden="true"></span>
+                <svg v-if="historyStatus(entry) === 'success'" aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="m5 12 5 5L20 7" />
+                </svg>
+                <svg v-else-if="historyStatus(entry) === 'failed'" aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M6 6l12 12" />
+                  <path d="M18 6 6 18" />
+                </svg>
+                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="6" />
+                </svg>
               </span>
+              <span class="history-time">{{ formatHistoryTimestamp(entry.createdAt) }}</span>
               <span class="history-main">
                 <strong>{{ historyValue(entry) }}</strong>
                 <small>{{ shortAddress(entry.to) }}</small>
