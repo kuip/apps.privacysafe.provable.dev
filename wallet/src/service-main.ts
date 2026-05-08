@@ -52,8 +52,22 @@ const externalMethods = new Set([
   'signTransaction',
 ]);
 
+type RuntimeGlobal = typeof globalThis & {
+  document?: Document;
+  addEventListener?: (type: string, listener: (event: unknown) => void) => void;
+  w3n?: typeof w3n;
+};
+
+function runtimeGlobal(): RuntimeGlobal {
+  return globalThis as RuntimeGlobal;
+}
+
+function runtimeW3n(): typeof w3n | undefined {
+  return runtimeGlobal().w3n;
+}
+
 function statusEl(): HTMLElement | null {
-  return document.getElementById('service-status');
+  return runtimeGlobal().document?.getElementById('service-status') ?? null;
 }
 
 function updateStatus(message: string): void {
@@ -66,7 +80,7 @@ function updateStatus(message: string): void {
 async function reportServiceError(context: string, err: unknown): Promise<void> {
   updateStatus(`Wallet service error: ${context}`);
   console.error(context, err);
-  await w3n.log?.('error', `Wallet service ${context}`, err);
+  await runtimeW3n()?.log?.('error', `Wallet service ${context}`, err);
 }
 
 async function callMethod(method: string, data: web3n.rpc.PassedDatum | undefined): Promise<unknown> {
@@ -138,7 +152,7 @@ async function handleCall(
 }
 
 function exposeWalletService(serviceName: string, allowedMethods: Set<string>): void {
-  w3n.rpc!.exposeService!(serviceName, {
+  runtimeW3n()?.rpc!.exposeService!(serviceName, {
     next(connection) {
       updateStatus(`${serviceName} connected.`);
       connection.watch({
@@ -166,13 +180,13 @@ function exposeWalletService(serviceName: string, allowedMethods: Set<string>): 
 }
 
 async function bootstrapService(attempt = 0): Promise<void> {
-  const runtime = w3n;
+  const runtime = runtimeW3n();
   if (!runtime?.rpc?.exposeService) {
     if (attempt === 0) {
       updateStatus('Wallet service waiting for runtime...');
     }
     if (attempt < 100) {
-      window.setTimeout(() => {
+      setTimeout(() => {
         void bootstrapService(attempt + 1);
       }, 50);
     } else {
@@ -194,10 +208,11 @@ async function bootstrapService(attempt = 0): Promise<void> {
 
 void bootstrapService();
 
-window.addEventListener('error', event => {
-  void reportServiceError('window error', event.error ?? event.message);
+runtimeGlobal().addEventListener?.('error', event => {
+  const errorEvent = event as ErrorEvent;
+  void reportServiceError('runtime error', errorEvent.error ?? errorEvent.message ?? event);
 });
 
-window.addEventListener('unhandledrejection', event => {
-  void reportServiceError('unhandled rejection', event.reason);
+runtimeGlobal().addEventListener?.('unhandledrejection', event => {
+  void reportServiceError('unhandled rejection', (event as PromiseRejectionEvent).reason ?? event);
 });

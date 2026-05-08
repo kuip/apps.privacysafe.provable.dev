@@ -84,8 +84,8 @@
         "minHeight": 640
       }
     },
-    "/service.html": {
-      "runtime": "web-gui",
+    "/walletDenoServices.js": {
+      "runtime": "deno",
       "services": {
         "WalletInternal": {
           "thisAppComponents": "*"
@@ -136,17 +136,6 @@
           ]
         },
         "logToPlatform": true
-      },
-      "windowOpts": {
-        "width": 1,
-        "height": 1,
-        "minWidth": 1,
-        "minHeight": 1,
-        "resizable": false,
-        "minimizable": false,
-        "maximizable": false,
-        "skipTaskbar": true,
-        "frame": false
       }
     }
   },
@@ -166,7 +155,7 @@
   "launchOnSystemStartup": [
     {
       "name": "Wallet signer service",
-      "component": "/service.html",
+      "component": "/walletDenoServices.js",
       "icon": "logo.png",
       "description": "Starts the wallet signing service for PrivacySafe app requests."
     }

@@ -818,7 +818,7 @@ export class WalletService {
   ): Promise<T> {
     let response: Response;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
     try {
       response = await fetch(rpcUrl, {
         method: 'POST',
@@ -841,7 +841,7 @@ export class WalletService {
       }
       throw new Error(`RPC ${method} fetch failed for ${rpcUrl}: ${errorMessage(err)}`);
     } finally {
-      window.clearTimeout(timeout);
+      clearTimeout(timeout);
     }
     if (!response.ok) {
       const body = await response.text().catch(() => '');
