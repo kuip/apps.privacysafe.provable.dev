@@ -1,10 +1,12 @@
 export type Chain = 'ethereum' | 'solana';
 export type SecretKind = 'mnemonic' | 'private-key';
+export type NetworkEnvironment = 'production' | 'development';
 
 export interface NetworkConfig {
   key: string;
   chain: Chain;
   name: string;
+  environment: NetworkEnvironment;
   nativeSymbol: string;
   rpcUrl: string;
   rpcUrls?: readonly string[];
@@ -26,7 +28,7 @@ export interface WalletAccount {
   chain: Chain;
   name: string;
   address: string;
-  networkKey: string;
+  networkKey?: string;
   derivationPath?: string;
   secretKind: SecretKind;
   createdAt: string;
@@ -46,6 +48,7 @@ export interface WalletSettings {
   requirePasswordForTransfers: boolean;
   requirePasswordForMessageSigning: boolean;
   requirePasswordForTransactionSigning: boolean;
+  enableDevelopmentNetworks: boolean;
 }
 
 export interface AccountSecret {
@@ -114,6 +117,7 @@ export interface RevealRecoveryPhraseResult {
 
 export interface BalanceRequest {
   accountId: string;
+  networkKey?: string;
   tokenId?: string;
 }
 
@@ -126,6 +130,7 @@ export interface BalanceResult {
 
 export interface TransferRequest {
   accountId: string;
+  networkKey?: string;
   to: string;
   amount: string;
   tokenId?: string;

@@ -18,7 +18,7 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 import { scrypt } from '@noble/hashes/scrypt';
 import { derivePath } from 'ed25519-hd-key';
 import { Buffer } from 'buffer';
-import { DEFAULT_NETWORKS, DEFAULT_TOKENS, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
+import { DEFAULT_NETWORK_LIST, DEFAULT_NETWORKS, DEFAULT_TOKENS, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
 import {
   base64ToBytes,
   bytesToBase64,
@@ -87,6 +87,7 @@ const DEFAULT_SETTINGS: WalletSettings = {
   requirePasswordForTransfers: true,
   requirePasswordForMessageSigning: false,
   requirePasswordForTransactionSigning: true,
+  enableDevelopmentNetworks: false,
 };
 const RPC_REQUEST_TIMEOUT_MS = 12000;
 
@@ -102,7 +103,7 @@ function publicStateFromVault(vault: VaultPlain): WalletPublicState {
   return {
     version: 1,
     accounts: vault.accounts,
-    networks: [DEFAULT_NETWORKS.ethereum, DEFAULT_NETWORKS.solana] as NetworkConfig[],
+    networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
     tokens: [...DEFAULT_TOKENS] as TokenConfig[],
     history: vault.history ?? [],
     settings: vault.settings ?? DEFAULT_SETTINGS,
@@ -114,12 +115,27 @@ function normalizePublicState(state: WalletPublicState | undefined): WalletPubli
   if (!state) {
     return undefined;
   }
+  const defaultNetworkByKey = new Map<string, NetworkConfig>(
+    DEFAULT_NETWORK_LIST.map(network => [network.key, network as NetworkConfig])
+  );
   const tokensById = new Map([
     ...DEFAULT_TOKENS.map(token => [token.id, token] as const),
     ...(state.tokens ?? []).map(token => [token.id, token] as const),
   ]);
+  const networksByKey = new Map<string, NetworkConfig>([
+    ...DEFAULT_NETWORK_LIST.map(network => [network.key, network as NetworkConfig] as const),
+    ...(state.networks ?? []).map(network => [
+      network.key,
+      {
+        ...(defaultNetworkByKey.get(network.key) ?? {}),
+        ...network,
+        environment: network.environment ?? defaultNetworkByKey.get(network.key)?.environment ?? 'production',
+      } as NetworkConfig,
+    ] as const),
+  ]);
   return {
     ...state,
+    networks: Array.from(networksByKey.values()) as NetworkConfig[],
     tokens: Array.from(tokensById.values()) as TokenConfig[],
     history: state.history ?? [],
     settings: {
@@ -253,8 +269,15 @@ function ethereumExplorer(txHash: string): string {
   return `https://etherscan.io/tx/${txHash}`;
 }
 
-function solanaExplorer(signature: string): string {
-  return `https://explorer.solana.com/tx/${signature}`;
+function ethereumExplorerFor(network: NetworkConfig, txHash: string): string {
+  return network.key === 'ethereum:sepolia'
+    ? `https://sepolia.etherscan.io/tx/${txHash}`
+    : ethereumExplorer(txHash);
+}
+
+function solanaExplorer(signature: string, network?: NetworkConfig): string {
+  const cluster = network?.key === 'solana:devnet' ? '?cluster=devnet' : '';
+  return `https://explorer.solana.com/tx/${signature}${cluster}`;
 }
 
 function errorMessage(err: unknown): string {
@@ -357,7 +380,7 @@ export class WalletService {
     return this.publicState ?? {
       version: 1,
       accounts: [],
-      networks: [DEFAULT_NETWORKS.ethereum, DEFAULT_NETWORKS.solana] as NetworkConfig[],
+      networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
       tokens: [...DEFAULT_TOKENS] as TokenConfig[],
       history: [],
       settings: { ...DEFAULT_SETTINGS },
@@ -467,7 +490,6 @@ export class WalletService {
         chain,
         name: request.name || `${chain === 'ethereum' ? 'Ethereum' : 'Solana'} ${index + 1}`,
         address,
-        networkKey: chain === 'ethereum' ? DEFAULT_NETWORKS.ethereum.key : DEFAULT_NETWORKS.solana.key,
         derivationPath: path,
         secretKind: 'mnemonic',
         createdAt: nowIso(),
@@ -503,7 +525,6 @@ export class WalletService {
       chain: request.chain,
       name: request.name || `${request.chain === 'ethereum' ? 'Ethereum' : 'Solana'} imported`,
       address,
-      networkKey: request.chain === 'ethereum' ? DEFAULT_NETWORKS.ethereum.key : DEFAULT_NETWORKS.solana.key,
       secretKind: 'private-key',
       createdAt: nowIso(),
     };
@@ -515,20 +536,24 @@ export class WalletService {
 
   async getBalance(request: BalanceRequest): Promise<BalanceResult> {
     const account = await this.getAccount(request.accountId);
+    const network = await this.getNetwork(request.networkKey, account.chain);
     try {
       if (request.tokenId) {
         const token = await this.getToken(request.tokenId);
         if (token.chain !== account.chain) {
           throw new Error('Token chain does not match account chain.');
         }
+        if (token.networkKey !== network.key) {
+          throw new Error('Token network does not match selected network.');
+        }
         return account.chain === 'ethereum'
-          ? this.getEthereumTokenBalance(account, token)
-          : this.getSolanaTokenBalance(account, token);
+          ? this.getEthereumTokenBalance(account, network, token)
+          : this.getSolanaTokenBalance(account, network, token);
       }
 
       return account.chain === 'ethereum'
-        ? this.getEthereumNativeBalance(account)
-        : this.getSolanaNativeBalance(account);
+        ? this.getEthereumNativeBalance(account, network)
+        : this.getSolanaNativeBalance(account, network);
     } catch (err) {
       if (/Could not reach .* RPC endpoint/i.test(errorMessage(err))) {
         throw err;
@@ -546,25 +571,27 @@ export class WalletService {
     assertUnlocked(this.vault);
     await this.confirmIfRequired('transfer', request.passphrase);
     const account = await this.getAccount(request.accountId);
+    const network = await this.getNetwork(request.networkKey, account.chain);
     let result: TransferResult;
     if (request.tokenId) {
       const token = await this.getToken(request.tokenId);
       if (token.chain !== account.chain) {
         throw new Error('Token chain does not match account chain.');
       }
+      if (token.networkKey !== network.key) {
+        throw new Error('Token network does not match selected network.');
+      }
       result = await (account.chain === 'ethereum'
-        ? this.transferEthereumToken(account, token, request)
-        : this.transferSolanaToken(account, token, request));
-      await this.tryRecordTransaction(account, request, result, token.symbol);
+        ? this.transferEthereumToken(account, network, token, request)
+        : this.transferSolanaToken(account, network, token, request));
+      await this.tryRecordTransaction(account, network, request, result, token.symbol);
       return result;
     }
 
     result = await (account.chain === 'ethereum'
-      ? this.transferEthereumNative(account, request)
-      : this.transferSolanaNative(account, request));
-    await this.tryRecordTransaction(account, request, result, account.chain === 'ethereum'
-      ? DEFAULT_NETWORKS.ethereum.nativeSymbol
-      : DEFAULT_NETWORKS.solana.nativeSymbol);
+      ? this.transferEthereumNative(account, network, request)
+      : this.transferSolanaNative(account, network, request));
+    await this.tryRecordTransaction(account, network, request, result, network.nativeSymbol);
     return result;
   }
 
@@ -703,6 +730,7 @@ export class WalletService {
 
   private async recordTransaction(
     account: WalletAccount,
+    network: NetworkConfig,
     request: TransferRequest,
     result: TransferResult,
     assetSymbol: string,
@@ -712,7 +740,7 @@ export class WalletService {
       id: `${Date.now()}:${result.signature}`,
       accountId: account.id,
       chain: account.chain,
-      networkKey: account.networkKey,
+      networkKey: network.key,
       assetSymbol,
       amount: request.amount,
       to: request.to,
@@ -726,12 +754,13 @@ export class WalletService {
 
   private async tryRecordTransaction(
     account: WalletAccount,
+    network: NetworkConfig,
     request: TransferRequest,
     result: TransferResult,
     assetSymbol: string,
   ): Promise<void> {
     try {
-      await this.recordTransaction(account, request, result, assetSymbol);
+      await this.recordTransaction(account, network, request, result, assetSymbol);
     } catch (err) {
       await w3n.log?.('error', 'Wallet failed to record transaction history', err);
     }
@@ -755,25 +784,28 @@ export class WalletService {
     return token;
   }
 
-  private ethereumRpcUrls(): string[] {
+  private async getNetwork(networkKey: string | undefined, chain: Chain): Promise<NetworkConfig> {
+    const state = await this.getPublicState();
+    const fallback = chain === 'ethereum' ? DEFAULT_NETWORKS.ethereum : DEFAULT_NETWORKS.solana;
+    const network = state.networks.find(item => item.key === (networkKey ?? fallback.key)) ?? fallback;
+    if (network.chain !== chain) {
+      throw new Error('Selected network does not match account chain.');
+    }
+    return network as NetworkConfig;
+  }
+
+  private rpcUrls(network: NetworkConfig): string[] {
     return Array.from(new Set([
-      DEFAULT_NETWORKS.ethereum.rpcUrl,
-      ...(DEFAULT_NETWORKS.ethereum.rpcUrls ?? []),
+      network.rpcUrl,
+      ...(network.rpcUrls ?? []),
     ]));
   }
 
-  private solanaRpcUrls(): string[] {
-    return Array.from(new Set([
-      DEFAULT_NETWORKS.solana.rpcUrl,
-      ...(DEFAULT_NETWORKS.solana.rpcUrls ?? []),
-    ]));
+  private ethereumProvider(network: NetworkConfig, rpcUrl: string = network.rpcUrl): ethers.JsonRpcProvider {
+    return new ethers.JsonRpcProvider(rpcUrl, network.chainId);
   }
 
-  private ethereumProvider(rpcUrl: string = DEFAULT_NETWORKS.ethereum.rpcUrl): ethers.JsonRpcProvider {
-    return new ethers.JsonRpcProvider(rpcUrl, DEFAULT_NETWORKS.ethereum.chainId);
-  }
-
-  private solanaConnection(rpcUrl: string = DEFAULT_NETWORKS.solana.rpcUrl): Connection {
+  private solanaConnection(network: NetworkConfig, rpcUrl: string = network.rpcUrl): Connection {
     return new Connection(rpcUrl, 'confirmed');
   }
 
@@ -858,8 +890,8 @@ export class WalletService {
     return payload.result;
   }
 
-  private async getEthereumNativeBalance(account: WalletAccount): Promise<BalanceResult> {
-    return this.withRpcFallback('ethereum', this.ethereumRpcUrls(), async rpcUrl => {
+  private async getEthereumNativeBalance(account: WalletAccount, network: NetworkConfig): Promise<BalanceResult> {
+    return this.withRpcFallback('ethereum', this.rpcUrls(network), async rpcUrl => {
       const rawHex = await this.jsonRpc<string>(
         rpcUrl,
         'eth_getBalance',
@@ -868,28 +900,28 @@ export class WalletService {
       const raw = BigInt(rawHex);
       return {
         accountId: account.id,
-        symbol: DEFAULT_NETWORKS.ethereum.nativeSymbol,
+        symbol: network.nativeSymbol,
         raw: raw.toString(),
         formatted: formatUnits(raw, 18),
       };
     });
   }
 
-  private async getSolanaNativeBalance(account: WalletAccount): Promise<BalanceResult> {
-    return this.withRpcFallback('solana', this.solanaRpcUrls(), async rpcUrl => {
+  private async getSolanaNativeBalance(account: WalletAccount, network: NetworkConfig): Promise<BalanceResult> {
+    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
       const result = await this.jsonRpc<SolanaBalanceResult>(rpcUrl, 'getBalance', [account.address]);
       const raw = result.value;
       return {
         accountId: account.id,
-        symbol: DEFAULT_NETWORKS.solana.nativeSymbol,
+        symbol: network.nativeSymbol,
         raw: String(raw),
         formatted: String(raw / LAMPORTS_PER_SOL),
       };
     });
   }
 
-  private async getEthereumTokenBalance(account: WalletAccount, token: TokenConfig): Promise<BalanceResult> {
-    return this.withRpcFallback('ethereum', this.ethereumRpcUrls(), async rpcUrl => {
+  private async getEthereumTokenBalance(account: WalletAccount, network: NetworkConfig, token: TokenConfig): Promise<BalanceResult> {
+    return this.withRpcFallback('ethereum', this.rpcUrls(network), async rpcUrl => {
       const data = ERC20_INTERFACE.encodeFunctionData('balanceOf', [account.address]);
       const rawHex = await this.jsonRpc<string>(
         rpcUrl,
@@ -906,8 +938,8 @@ export class WalletService {
     });
   }
 
-  private async getSolanaTokenBalance(account: WalletAccount, token: TokenConfig): Promise<BalanceResult> {
-    return this.withRpcFallback('solana', this.solanaRpcUrls(), async rpcUrl => {
+  private async getSolanaTokenBalance(account: WalletAccount, network: NetworkConfig, token: TokenConfig): Promise<BalanceResult> {
+    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
       const tokenAccount = await getAssociatedTokenAddress(
         new PublicKey(token.address),
         new PublicKey(account.address),
@@ -937,10 +969,10 @@ export class WalletService {
     });
   }
 
-  private async transferEthereumNative(account: WalletAccount, request: TransferRequest): Promise<TransferResult> {
+  private async transferEthereumNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
     assertUnlocked(this.vault);
     const secret = this.vault.secrets[account.id];
-    const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider());
+    const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
     const tx = await wallet.sendTransaction({
       to: request.to,
       value: parseUnits(request.amount, 18),
@@ -949,33 +981,34 @@ export class WalletService {
       accountId: account.id,
       chain: account.chain,
       signature: tx.hash,
-      explorerUrl: ethereumExplorer(tx.hash),
+      explorerUrl: ethereumExplorerFor(network, tx.hash),
     };
   }
 
   private async transferEthereumToken(
     account: WalletAccount,
+    network: NetworkConfig,
     token: TokenConfig,
     request: TransferRequest,
   ): Promise<TransferResult> {
     assertUnlocked(this.vault);
     const secret = this.vault.secrets[account.id];
-    const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider());
+    const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
     const contract = new ethers.Contract(token.address, ERC20_ABI, wallet);
     const tx = await contract.transfer(request.to, parseUnits(request.amount, token.decimals));
     return {
       accountId: account.id,
       chain: account.chain,
       signature: tx.hash,
-      explorerUrl: ethereumExplorer(tx.hash),
+      explorerUrl: ethereumExplorerFor(network, tx.hash),
     };
   }
 
-  private async transferSolanaNative(account: WalletAccount, request: TransferRequest): Promise<TransferResult> {
+  private async transferSolanaNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
     assertUnlocked(this.vault);
     const secret = this.vault.secrets[account.id];
     const keypair = solanaKeypairFromSecret(secret);
-    const connection = this.solanaConnection();
+    const connection = this.solanaConnection(network);
     const transaction = new Transaction().add(SystemProgram.transfer({
       fromPubkey: keypair.publicKey,
       toPubkey: new PublicKey(request.to),
@@ -986,19 +1019,20 @@ export class WalletService {
       accountId: account.id,
       chain: account.chain,
       signature,
-      explorerUrl: solanaExplorer(signature),
+      explorerUrl: solanaExplorer(signature, network),
     };
   }
 
   private async transferSolanaToken(
     account: WalletAccount,
+    network: NetworkConfig,
     token: TokenConfig,
     request: TransferRequest,
   ): Promise<TransferResult> {
     assertUnlocked(this.vault);
     const secret = this.vault.secrets[account.id];
     const keypair = solanaKeypairFromSecret(secret);
-    const connection = this.solanaConnection();
+    const connection = this.solanaConnection(network);
     const mint = new PublicKey(token.address);
     const recipient = new PublicKey(request.to);
     const sourceAta = await getAssociatedTokenAddress(mint, keypair.publicKey);
@@ -1026,7 +1060,7 @@ export class WalletService {
       accountId: account.id,
       chain: account.chain,
       signature,
-      explorerUrl: solanaExplorer(signature),
+      explorerUrl: solanaExplorer(signature, network),
     };
   }
 }

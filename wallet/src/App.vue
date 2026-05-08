@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
-import { DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
+import { DEFAULT_NETWORK_LIST, DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
 import { callThisAppService } from '@/lib/json-rpc';
 import { shortAddress } from '@/lib/format';
 import { openJsonStore } from '@/lib/storage';
 import type {
   BalanceResult,
   Chain,
+  NetworkConfig,
   RevealRecoveryPhraseResult,
   SignMessageResult,
   TransactionHistoryEntry,
@@ -22,6 +23,7 @@ const defaultSettings: WalletSettings = {
   requirePasswordForTransfers: true,
   requirePasswordForMessageSigning: false,
   requirePasswordForTransactionSigning: true,
+  enableDevelopmentNetworks: false,
 };
 
 const status = ref<WalletStatus>({
@@ -100,11 +102,18 @@ let balanceRefreshTimer: number | undefined;
 let balanceRefreshSeq = 0;
 let balanceRefreshQueued = false;
 
+const availableNetworks = computed(() => (
+  state.value.networks.filter(network => (
+    network.environment === 'production' || state.value.settings.enableDevelopmentNetworks
+  ))
+));
 const selectedNetwork = computed(() => (
-  state.value.networks.find(network => network.key === selectedNetworkKey.value)
+  availableNetworks.value.find(network => network.key === selectedNetworkKey.value)
 ));
 const accountsForNetwork = computed(() => (
-  state.value.accounts.filter(account => account.networkKey === selectedNetworkKey.value)
+  selectedNetwork.value
+    ? state.value.accounts.filter(account => account.chain === selectedNetwork.value?.chain)
+    : []
 ));
 const selectedAccount = computed(() => (
   state.value.accounts.find(account => account.id === selectedAccountId.value)
@@ -120,7 +129,9 @@ const compatibleTokens = computed<TokenConfig[]>(() => {
   if (!account) {
     return [];
   }
-  return state.value.tokens.filter(token => token.chain === account.chain && token.networkKey === account.networkKey);
+  return state.value.tokens.filter(token => (
+    token.chain === account.chain && token.networkKey === selectedNetworkKey.value
+  ));
 });
 
 const selectedAssetSymbol = computed(() => {
@@ -128,16 +139,16 @@ const selectedAssetSymbol = computed(() => {
   if (token) {
     return token.symbol;
   }
-  return selectedAccount.value?.chain === 'ethereum' ? 'ETH' : 'SOL';
+  return selectedNetwork.value?.nativeSymbol ?? (selectedAccount.value?.chain === 'ethereum' ? 'ETH' : 'SOL');
 });
 const nativeBalance = computed(() => (
-  selectedAccount.value ? balanceByKey.value[balanceKey(selectedAccount.value.id)] : undefined
+  selectedAccount.value ? balanceByKey.value[balanceKey(selectedAccount.value.id, 'native', selectedNetworkKey.value)] : undefined
 ));
 const trackedTokenRows = computed(() => (
   compatibleTokens.value.map(token => ({
     token,
-    balance: selectedAccount.value ? balanceByKey.value[balanceKey(selectedAccount.value.id, token.id)] : undefined,
-    error: selectedAccount.value ? balanceErrors.value[balanceKey(selectedAccount.value.id, token.id)] : undefined,
+    balance: selectedAccount.value ? balanceByKey.value[balanceKey(selectedAccount.value.id, token.id, selectedNetworkKey.value)] : undefined,
+    error: selectedAccount.value ? balanceErrors.value[balanceKey(selectedAccount.value.id, token.id, selectedNetworkKey.value)] : undefined,
   }))
 ));
 
@@ -240,8 +251,8 @@ function clearError(): void {
   errorDetails.value = '';
 }
 
-function balanceKey(accountId: string, tokenId = 'native'): string {
-  return `${accountId}:${tokenId}`;
+function balanceKey(accountId: string, tokenId = 'native', networkKey = selectedNetworkKey.value): string {
+  return `${networkKey}:${accountId}:${tokenId}`;
 }
 
 function balanceText(result: BalanceResult | undefined): string {
@@ -293,6 +304,20 @@ function syncSettingsForm(): void {
 }
 
 function normalizePublicState(value: WalletPublicState | undefined): WalletPublicState {
+  const defaultNetworkByKey = new Map<string, NetworkConfig>(
+    DEFAULT_NETWORK_LIST.map(network => [network.key, network as NetworkConfig])
+  );
+  const networksByKey = new Map<string, NetworkConfig>([
+    ...DEFAULT_NETWORK_LIST.map(network => [network.key, network as NetworkConfig] as const),
+    ...(value?.networks ?? []).map(network => [
+      network.key,
+      {
+        ...(defaultNetworkByKey.get(network.key) ?? {}),
+        ...network,
+        environment: network.environment ?? defaultNetworkByKey.get(network.key)?.environment ?? 'production',
+      } as NetworkConfig,
+    ] as const),
+  ]);
   const tokensById = new Map([
     ...DEFAULT_TOKENS.map(token => [token.id, token] as const),
     ...(value?.tokens ?? []).map(token => [token.id, token] as const),
@@ -300,7 +325,7 @@ function normalizePublicState(value: WalletPublicState | undefined): WalletPubli
   return {
     version: 1,
     accounts: value?.accounts ?? [],
-    networks: value?.networks ?? [],
+    networks: Array.from(networksByKey.values()),
     tokens: Array.from(tokensById.values()) as TokenConfig[],
     history: value?.history ?? [],
     settings: {
@@ -312,11 +337,11 @@ function normalizePublicState(value: WalletPublicState | undefined): WalletPubli
 }
 
 function selectDefaultNetworkAndAccount(): void {
-  if (!selectedNetworkKey.value && state.value.networks[0]) {
-    selectedNetworkKey.value = state.value.networks[0].key;
+  if (!selectedNetworkKey.value && availableNetworks.value[0]) {
+    selectedNetworkKey.value = availableNetworks.value[0].key;
   }
-  if (selectedNetworkKey.value && !state.value.networks.some(network => network.key === selectedNetworkKey.value)) {
-    selectedNetworkKey.value = state.value.networks[0]?.key ?? '';
+  if (selectedNetworkKey.value && !availableNetworks.value.some(network => network.key === selectedNetworkKey.value)) {
+    selectedNetworkKey.value = availableNetworks.value[0]?.key ?? '';
   }
   if (!accountsForNetwork.value.some(account => account.id === selectedAccountId.value)) {
     selectedAccountId.value = accountsForNetwork.value[0]?.id ?? '';
@@ -388,12 +413,40 @@ async function lock(): Promise<void> {
   });
 }
 
-async function saveSettings(): Promise<void> {
-  await run(async () => {
-    state.value = await serviceCall<Partial<WalletSettings>, WalletPublicState>('updateSettings', settingsForm);
+async function updateSetting(key: keyof WalletSettings): Promise<void> {
+  const previousSettings = { ...state.value.settings };
+  const nextSettings: WalletSettings = {
+    ...previousSettings,
+    [key]: settingsForm[key],
+  };
+
+  state.value = {
+    ...state.value,
+    settings: nextSettings,
+  };
+  selectDefaultNetworkAndAccount();
+  setResult('');
+
+  busy.value = true;
+  try {
+    state.value = normalizePublicState(
+      await serviceCall<Partial<WalletSettings>, WalletPublicState>('updateSettings', {
+        [key]: settingsForm[key],
+      } as Partial<WalletSettings>)
+    );
     syncSettingsForm();
-    setResult('Settings saved.');
-  });
+    selectDefaultNetworkAndAccount();
+  } catch (err) {
+    state.value = {
+      ...state.value,
+      settings: previousSettings,
+    };
+    syncSettingsForm();
+    selectDefaultNetworkAndAccount();
+    setError(err);
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function createNewWallet(): Promise<void> {
@@ -443,12 +496,13 @@ async function importPrivateKey(): Promise<void> {
 }
 
 async function fetchBalance(accountId: string, tokenId?: string): Promise<void> {
-  const key = balanceKey(accountId, tokenId);
+  const key = balanceKey(accountId, tokenId, selectedNetworkKey.value);
   const result = await serviceCall<
-    { accountId: string; tokenId?: string },
+    { accountId: string; networkKey?: string; tokenId?: string },
     BalanceResult
   >('getBalance', {
     accountId,
+    networkKey: selectedNetworkKey.value,
     tokenId,
   });
   balanceByKey.value = {
@@ -478,7 +532,7 @@ async function refreshSelectedBalances(): Promise<void> {
     if (seq !== balanceRefreshSeq) {
       break;
     }
-    const key = balanceKey(account.id, tokenId);
+    const key = balanceKey(account.id, tokenId, selectedNetworkKey.value);
     try {
       await fetchBalance(account.id, tokenId);
     } catch (err) {
@@ -513,10 +567,11 @@ async function transfer(): Promise<void> {
   }
   await run(async () => {
     const result = await serviceCall<
-      { accountId: string; to: string; amount: string; tokenId?: string; passphrase?: string },
+      { accountId: string; networkKey?: string; to: string; amount: string; tokenId?: string; passphrase?: string },
       TransferResult
     >('transfer', {
       accountId: selectedAccountId.value,
+      networkKey: selectedNetworkKey.value,
       to: transferForm.to,
       amount: transferForm.amount,
       tokenId: selectedTokenId.value || undefined,
@@ -638,6 +693,9 @@ async function openExternalUrl(url: string | undefined): Promise<void> {
 }
 
 watch(() => state.value.settings, syncSettingsForm, { deep: true });
+watch(() => state.value.settings.enableDevelopmentNetworks, () => {
+  selectDefaultNetworkAndAccount();
+});
 watch(selectedNetworkKey, () => {
   selectedTokenId.value = '';
   if (!accountsForNetwork.value.some(account => account.id === selectedAccountId.value)) {
@@ -725,47 +783,44 @@ onUnmounted(() => {
           <img alt="Wallet" class="brand__logo" src="/logo.svg" />
           <h1>Wallet</h1>
           <button class="lock-toggle" :disabled="busy" title="Lock wallet" aria-label="Lock wallet" @click="lock">
-            <span aria-hidden="true">🔓</span>
+            <svg class="lock-icon" aria-hidden="true" viewBox="0 0 24 24">
+              <rect x="5" y="10" width="14" height="10" rx="2" />
+              <path d="M8 10V7a4 4 0 0 1 7.5-2" />
+            </svg>
           </button>
         </div>
-
-        <div class="header-selectors">
-          <label>
-            <span>Network</span>
-            <select v-model="selectedNetworkKey">
-              <option v-for="network in state.networks" :key="network.key" :value="network.key">
-                {{ network.name }}
-              </option>
-            </select>
-          </label>
-          <label>
-            <span>Account</span>
-            <select v-model="selectedAccountId" :disabled="accountsForNetwork.length === 0">
-              <option v-if="accountsForNetwork.length === 0" value="">No account</option>
-              <option v-for="account in accountsForNetwork" :key="account.id" :value="account.id">
-                {{ account.name }} - {{ shortAddress(account.address) }}
-              </option>
-            </select>
-          </label>
-        </div>
-
       </header>
 
       <nav class="tabbar" aria-label="Wallet sections">
         <button class="tab-btn" :data-active="activeTab === 'home'" aria-label="Home" @click="activeTab = 'home'">
-          <span class="tab-icon" aria-hidden="true">⌂</span>
+          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+          </svg>
           <span class="tab-label">Home</span>
         </button>
         <button class="tab-btn" :data-active="activeTab === 'create'" aria-label="Add account" @click="activeTab = 'create'">
-          <span class="tab-icon" aria-hidden="true">+</span>
+          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
           <span class="tab-label">Add</span>
         </button>
         <button class="tab-btn" :data-active="activeTab === 'history'" aria-label="History" @click="activeTab = 'history'">
-          <span class="tab-icon" aria-hidden="true">◷</span>
+          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M4 7v5h5" />
+            <path d="M5 12a7 7 0 1 0 2-5" />
+            <path d="M12 8v5l3 2" />
+          </svg>
           <span class="tab-label">History</span>
         </button>
         <button class="tab-btn" :data-active="activeTab === 'settings'" aria-label="Settings" @click="activeTab = 'settings'">
-          <span class="tab-icon" aria-hidden="true">⚙</span>
+          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M4 7h16" />
+            <path d="M4 17h16" />
+            <circle cx="9" cy="7" r="2" />
+            <circle cx="15" cy="17" r="2" />
+          </svg>
           <span class="tab-label">Settings</span>
         </button>
       </nav>
@@ -837,6 +892,26 @@ onUnmounted(() => {
       </section>
 
       <section v-else-if="activeTab === 'home'" class="tab-surface home-grid">
+        <div class="home-selectors">
+          <label>
+            <span>Network</span>
+            <select v-model="selectedNetworkKey">
+              <option v-for="network in availableNetworks" :key="network.key" :value="network.key">
+                {{ network.name }}
+              </option>
+            </select>
+          </label>
+          <label>
+            <span>Account</span>
+            <select v-model="selectedAccountId" :disabled="accountsForNetwork.length === 0">
+              <option v-if="accountsForNetwork.length === 0" value="">No account</option>
+              <option v-for="account in accountsForNetwork" :key="account.id" :value="account.id">
+                {{ account.name }} - {{ shortAddress(account.address) }}
+              </option>
+            </select>
+          </label>
+        </div>
+
         <article class="panel account-overview">
           <div class="panel__header">
             <div>
@@ -983,23 +1058,49 @@ onUnmounted(() => {
               <strong>Require password for transfers</strong>
               <small>Applies to ETH, SOL, ERC-20, and SPL token transfers.</small>
             </span>
-            <input v-model="settingsForm.requirePasswordForTransfers" type="checkbox" />
+            <input
+              v-model="settingsForm.requirePasswordForTransfers"
+              :disabled="busy"
+              type="checkbox"
+              @change="updateSetting('requirePasswordForTransfers')"
+            />
           </label>
           <label class="toggle-row">
             <span>
               <strong>Require password for message signing</strong>
               <small>Applies to direct signMessage requests.</small>
             </span>
-            <input v-model="settingsForm.requirePasswordForMessageSigning" type="checkbox" />
+            <input
+              v-model="settingsForm.requirePasswordForMessageSigning"
+              :disabled="busy"
+              type="checkbox"
+              @change="updateSetting('requirePasswordForMessageSigning')"
+            />
           </label>
           <label class="toggle-row">
             <span>
               <strong>Require password for transaction signing</strong>
               <small>Applies to raw transaction signing from other PrivacySafe apps.</small>
             </span>
-            <input v-model="settingsForm.requirePasswordForTransactionSigning" type="checkbox" />
+            <input
+              v-model="settingsForm.requirePasswordForTransactionSigning"
+              :disabled="busy"
+              type="checkbox"
+              @change="updateSetting('requirePasswordForTransactionSigning')"
+            />
           </label>
-          <button class="btn btn--primary" :disabled="busy" @click="saveSettings">Save settings</button>
+          <label class="toggle-row">
+            <span>
+              <strong>Development networks</strong>
+              <small>Shows Ethereum and Solana Testnets in the network selector.</small>
+            </span>
+            <input
+              v-model="settingsForm.enableDevelopmentNetworks"
+              :disabled="busy"
+              type="checkbox"
+              @change="updateSetting('enableDevelopmentNetworks')"
+            />
+          </label>
         </article>
 
         <article class="panel">
