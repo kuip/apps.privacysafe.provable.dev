@@ -333,6 +333,20 @@ type SolanaBalanceResult = {
   value: number;
 };
 
+type SolanaLatestBlockhashResult = {
+  value: {
+    blockhash: string;
+    lastValidBlockHeight: number;
+  };
+};
+
+type SolanaSignatureStatusesResult = {
+  value: Array<{
+    err: unknown | null;
+    confirmationStatus?: string | null;
+  } | null>;
+};
+
 export class WalletService {
   private vault?: VaultPlain;
   private passphrase?: string;
@@ -606,6 +620,7 @@ export class WalletService {
         ? this.transferEthereumToken(account, network, token, request)
         : this.transferSolanaToken(account, network, token, request));
       await this.tryRecordTransaction(account, network, request, result, token.symbol);
+      this.refreshSolanaHistoryStatus(account, network, result);
       return result;
     }
 
@@ -613,6 +628,7 @@ export class WalletService {
       ? this.transferEthereumNative(account, network, request)
       : this.transferSolanaNative(account, network, request));
     await this.tryRecordTransaction(account, network, request, result, network.nativeSymbol);
+    this.refreshSolanaHistoryStatus(account, network, result);
     return result;
   }
 
@@ -791,6 +807,36 @@ export class WalletService {
     } catch (err) {
       await w3n.log?.('error', 'Wallet failed to record transaction history', err);
     }
+  }
+
+  private refreshSolanaHistoryStatus(
+    account: WalletAccount,
+    network: NetworkConfig,
+    result: TransferResult,
+  ): void {
+    if (account.chain !== 'solana' || result.status !== 'pending') {
+      return;
+    }
+
+    void (async () => {
+      const confirmation = await this.waitForSolanaConfirmation(network, result.signature);
+      if (!this.vault || confirmation.status === 'pending') {
+        return;
+      }
+      const entry = (this.vault.history ?? []).find(item => (
+        item.accountId === account.id
+        && item.networkKey === network.key
+        && item.signature === result.signature
+      ));
+      if (!entry) {
+        return;
+      }
+      entry.status = confirmation.status;
+      entry.confirmedAt = confirmation.confirmedAt;
+      await this.persist();
+    })().catch(err => {
+      void w3n.log?.('error', `Wallet failed to refresh Solana transaction status ${result.signature}`, err);
+    });
   }
 
   private async getAccount(accountIdToFind: string): Promise<WalletAccount> {
@@ -1047,20 +1093,17 @@ export class WalletService {
     assertUnlocked(this.vault);
     const secret = this.vault.secrets[account.id];
     const keypair = solanaKeypairFromSecret(secret);
-    const connection = this.solanaConnection(network);
     const transaction = new Transaction().add(SystemProgram.transfer({
       fromPubkey: keypair.publicKey,
       toPubkey: new PublicKey(request.to),
       lamports: Number(parseUnits(request.amount, 9)),
     }));
-    const signature = await connection.sendTransaction(transaction, [keypair]);
-    const confirmation = await this.waitForSolanaConfirmation(connection, signature);
+    const signature = await this.sendSolanaTransaction(network, transaction, keypair);
     return {
       accountId: account.id,
       chain: account.chain,
       signature,
-      status: confirmation.status,
-      confirmedAt: confirmation.confirmedAt,
+      status: 'pending',
       explorerUrl: solanaExplorer(signature, network),
     };
   }
@@ -1074,15 +1117,13 @@ export class WalletService {
     assertUnlocked(this.vault);
     const secret = this.vault.secrets[account.id];
     const keypair = solanaKeypairFromSecret(secret);
-    const connection = this.solanaConnection(network);
     const mint = new PublicKey(token.address);
     const recipient = new PublicKey(request.to);
     const sourceAta = await getAssociatedTokenAddress(mint, keypair.publicKey);
     const recipientAta = await getAssociatedTokenAddress(mint, recipient);
     const transaction = new Transaction();
 
-    const recipientInfo = await connection.getAccountInfo(recipientAta);
-    if (!recipientInfo) {
+    if (!(await this.solanaAccountExists(network, recipientAta))) {
       transaction.add(createAssociatedTokenAccountInstruction(
         keypair.publicKey,
         recipientAta,
@@ -1097,14 +1138,12 @@ export class WalletService {
       keypair.publicKey,
       parseUnits(request.amount, token.decimals),
     ));
-    const signature = await connection.sendTransaction(transaction, [keypair]);
-    const confirmation = await this.waitForSolanaConfirmation(connection, signature);
+    const signature = await this.sendSolanaTransaction(network, transaction, keypair);
     return {
       accountId: account.id,
       chain: account.chain,
       signature,
-      status: confirmation.status,
-      confirmedAt: confirmation.confirmedAt,
+      status: 'pending',
       explorerUrl: solanaExplorer(signature, network),
     };
   }
@@ -1123,24 +1162,69 @@ export class WalletService {
     }
   }
 
+  private async solanaAccountExists(network: NetworkConfig, publicKey: PublicKey): Promise<boolean> {
+    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
+      const result = await this.jsonRpc<SolanaAccountInfoResult>(rpcUrl, 'getAccountInfo', [
+        publicKey.toBase58(),
+        { encoding: 'base64' },
+      ]);
+      return !!result.value;
+    });
+  }
+
+  private async sendSolanaTransaction(
+    network: NetworkConfig,
+    transaction: Transaction,
+    signer: Keypair,
+  ): Promise<string> {
+    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
+      const latest = await this.jsonRpc<SolanaLatestBlockhashResult>(rpcUrl, 'getLatestBlockhash', [
+        { commitment: 'confirmed' },
+      ]);
+      transaction.feePayer = signer.publicKey;
+      transaction.recentBlockhash = latest.value.blockhash;
+      transaction.sign(signer);
+      const rawTransaction = bytesToBase64(transaction.serialize());
+      return this.jsonRpc<string>(rpcUrl, 'sendTransaction', [
+        rawTransaction,
+        {
+          encoding: 'base64',
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        },
+      ]);
+    });
+  }
+
   private async waitForSolanaConfirmation(
-    connection: Connection,
+    network: NetworkConfig,
     signature: string,
   ): Promise<{ status: TransferResult['status']; confirmedAt?: string }> {
+    const startedAt = Date.now();
+    let seenPending = false;
     try {
-      const confirmation = await withTimeout(
-        connection.confirmTransaction(signature, 'confirmed'),
-        TX_CONFIRM_TIMEOUT_MS,
-      );
-      if (!confirmation) {
-        return { status: 'not_included' };
+      while (Date.now() - startedAt < TX_CONFIRM_TIMEOUT_MS) {
+        const result = await this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => (
+          this.jsonRpc<SolanaSignatureStatusesResult>(rpcUrl, 'getSignatureStatuses', [
+            [signature],
+            { searchTransactionHistory: true },
+          ])
+        ));
+        const status = result.value[0];
+        if (status) {
+          if (status.err) {
+            return { status: 'failed', confirmedAt: nowIso() };
+          }
+          if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
+            return { status: 'success', confirmedAt: nowIso() };
+          }
+          seenPending = true;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
-      return {
-        status: confirmation.value.err ? 'failed' : 'success',
-        confirmedAt: nowIso(),
-      };
-    } catch {
-      return { status: 'not_included' };
+    } catch (err) {
+      await w3n.log?.('error', `Wallet could not confirm Solana transaction ${signature}`, err);
     }
+    return { status: seenPending ? 'pending' : 'not_included' };
   }
 }
