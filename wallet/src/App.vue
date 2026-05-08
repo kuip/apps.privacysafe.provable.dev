@@ -1173,7 +1173,6 @@ onUnmounted(() => {
               <span class="history-time">{{ formatHistoryTimestamp(entry.createdAt) }}</span>
               <span class="history-status">
                 <span class="status-dot" aria-hidden="true"></span>
-                <span>{{ historyStatusLabel(entry) }}</span>
               </span>
               <span class="history-main">
                 <strong>{{ historyValue(entry) }}</strong>
@@ -1220,8 +1219,13 @@ onUnmounted(() => {
                   </dd>
                 </div>
               </dl>
-              <button v-if="entry.explorerUrl" class="btn btn--secondary" @click="openExternalUrl(entry.explorerUrl)">
-                Open explorer
+              <button v-if="entry.explorerUrl" class="btn btn--secondary explorer-button" @click="openExternalUrl(entry.explorerUrl)">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M14 4h6v6" />
+                  <path d="M10 14 20 4" />
+                  <path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4" />
+                </svg>
+                <span>Open explorer</span>
               </button>
             </div>
           </article>
