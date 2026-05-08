@@ -31,6 +31,20 @@ export const DEFAULT_NETWORKS = {
     ],
     chainId: 11155111,
   },
+  ethereumHoodi: {
+    key: 'ethereum:hoodi',
+    chain: 'ethereum',
+    name: 'Ethereum Hoodi',
+    environment: 'development',
+    nativeSymbol: 'Hoodi ETH',
+    rpcUrl: 'https://rpc.hoodi.ethpandaops.io',
+    rpcUrls: [
+      'https://rpc.hoodi.ethpandaops.io',
+      'https://ethereum-hoodi-rpc.publicnode.com',
+      'https://0xrpc.io/hoodi',
+    ],
+    chainId: 560048,
+  },
   solana: {
     key: 'solana:mainnet',
     chain: 'solana',

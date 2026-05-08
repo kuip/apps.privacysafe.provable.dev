@@ -270,9 +270,13 @@ function ethereumExplorer(txHash: string): string {
 }
 
 function ethereumExplorerFor(network: NetworkConfig, txHash: string): string {
-  return network.key === 'ethereum:sepolia'
-    ? `https://sepolia.etherscan.io/tx/${txHash}`
-    : ethereumExplorer(txHash);
+  if (network.key === 'ethereum:sepolia') {
+    return `https://sepolia.etherscan.io/tx/${txHash}`;
+  }
+  if (network.key === 'ethereum:hoodi') {
+    return `https://hoodi.etherscan.io/tx/${txHash}`;
+  }
+  return ethereumExplorer(txHash);
 }
 
 function solanaExplorer(signature: string, network?: NetworkConfig): string {

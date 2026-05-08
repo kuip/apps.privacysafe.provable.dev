@@ -31,6 +31,14 @@
             },
             {
               "schema": "https",
+              "domain": "sepolia.etherscan.io"
+            },
+            {
+              "schema": "https",
+              "domain": "hoodi.etherscan.io"
+            },
+            {
+              "schema": "https",
               "domain": "explorer.solana.com"
             }
           ],
@@ -60,6 +68,18 @@
             {
               "schema": "https",
               "domain": "sepolia.drpc.org"
+            },
+            {
+              "schema": "https",
+              "domain": "rpc.hoodi.ethpandaops.io"
+            },
+            {
+              "schema": "https",
+              "domain": "ethereum-hoodi-rpc.publicnode.com"
+            },
+            {
+              "schema": "https",
+              "domain": "0xrpc.io"
             },
             {
               "schema": "https",
@@ -120,6 +140,18 @@
             {
               "schema": "https",
               "domain": "sepolia.drpc.org"
+            },
+            {
+              "schema": "https",
+              "domain": "rpc.hoodi.ethpandaops.io"
+            },
+            {
+              "schema": "https",
+              "domain": "ethereum-hoodi-rpc.publicnode.com"
+            },
+            {
+              "schema": "https",
+              "domain": "0xrpc.io"
             },
             {
               "schema": "https",
