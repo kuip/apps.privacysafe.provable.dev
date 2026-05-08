@@ -949,62 +949,64 @@ onUnmounted(() => {
             <input v-model.trim="addForm.accountName" autocomplete="off" />
           </label>
         </div>
-        <div class="grid grid--setup">
-        <article class="panel">
-          <div class="panel__header">
-            <h2>Generate New Account</h2>
-            <button class="btn btn--primary" :disabled="busy" @click="createNewWallet">
-              Generate
-            </button>
-          </div>
-          <div v-if="generatedMnemonic" class="recovery-box">
-            <span>Recovery phrase for the wallet just created</span>
-            <code>{{ generatedMnemonic }}</code>
-            <button class="btn btn--secondary" :disabled="busy" @click="copy(generatedMnemonic)">
-              Copy phrase
-            </button>
-          </div>
-          <div class="panel-divider"></div>
-          <div class="panel__header">
-            <h2>Import Recovery Phrase</h2>
-          </div>
-          <textarea
-            v-model.trim="mnemonicForm.mnemonic"
-            rows="3"
-            placeholder="BIP-39 mnemonic"
-            spellcheck="false"
-          />
-          <button
-            class="btn btn--primary"
-            :disabled="busy || !mnemonicForm.mnemonic"
-            @click="importMnemonic"
-          >
-            Import
-          </button>
-        </article>
+        <div class="add-sections">
+          <article class="add-section">
+            <div class="panel__header">
+              <h2>Generate New Account</h2>
+              <button class="btn btn--primary" :disabled="busy" @click="createNewWallet">
+                Generate
+              </button>
+            </div>
+            <div v-if="generatedMnemonic" class="recovery-box">
+              <span>Recovery phrase for the wallet just created</span>
+              <code>{{ generatedMnemonic }}</code>
+              <button class="btn btn--secondary" :disabled="busy" @click="copy(generatedMnemonic)">
+                Copy phrase
+              </button>
+            </div>
+          </article>
 
-        <article class="panel">
-          <div class="panel__header">
-            <h2>Import Private Key</h2>
-          </div>
-          <select v-model="privateKeyForm.chain">
-            <option value="ethereum">Ethereum 32-byte private key</option>
-            <option value="solana">Solana 32-byte seed</option>
-          </select>
-          <textarea
-            v-model.trim="privateKeyForm.privateKey"
-            rows="3"
-            placeholder="Hex, base58, base64, or JSON byte array"
-            spellcheck="false"
-          />
-          <button
-            class="btn btn--primary"
-            :disabled="busy || !privateKeyForm.privateKey"
-            @click="importPrivateKey"
-          >
-            Import private key
-          </button>
-        </article>
+          <article class="add-section">
+            <div class="panel__header">
+              <h2>Import Recovery Phrase</h2>
+            </div>
+            <textarea
+              v-model.trim="mnemonicForm.mnemonic"
+              rows="3"
+              placeholder="BIP-39 mnemonic"
+              spellcheck="false"
+            />
+            <button
+              class="btn btn--primary"
+              :disabled="busy || !mnemonicForm.mnemonic"
+              @click="importMnemonic"
+            >
+              Import
+            </button>
+          </article>
+
+          <article class="add-section">
+            <div class="panel__header">
+              <h2>Import Private Key</h2>
+            </div>
+            <select v-model="privateKeyForm.chain">
+              <option value="ethereum">Ethereum 32-byte private key</option>
+              <option value="solana">Solana 32-byte seed</option>
+            </select>
+            <textarea
+              v-model.trim="privateKeyForm.privateKey"
+              rows="3"
+              placeholder="Hex, base58, base64, or JSON byte array"
+              spellcheck="false"
+            />
+            <button
+              class="btn btn--primary"
+              :disabled="busy || !privateKeyForm.privateKey"
+              @click="importPrivateKey"
+            >
+              Import private key
+            </button>
+          </article>
         </div>
       </section>
 

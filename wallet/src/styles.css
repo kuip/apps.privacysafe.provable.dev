@@ -408,24 +408,33 @@ textarea:focus {
   display: grid;
   grid-auto-rows: max-content;
   align-content: start;
-  gap: var(--spacing-s, 8px);
+  gap: var(--spacing-m, 16px);
 }
 
 .add-name-row {
   max-width: 420px;
 }
 
-.grid--setup .panel {
+.add-sections {
+  display: grid;
+  gap: var(--spacing-m, 16px);
+  align-items: start;
+}
+
+.add-section {
+  min-width: 0;
+  display: grid;
+  gap: var(--spacing-s, 8px);
   align-content: start;
 }
 
-.grid--setup input,
-.grid--setup select {
+.add-section input,
+.add-section select {
   height: 36px;
   align-self: start;
 }
 
-.grid--setup textarea {
+.add-section textarea {
   min-height: 82px;
   max-height: 96px;
   align-self: start;
@@ -840,6 +849,7 @@ pre {
 
 @media (max-width: 980px) {
   .grid--setup,
+  .add-sections,
   .work-panels,
   .settings-grid {
     grid-template-columns: 1fr;
