@@ -176,24 +176,25 @@ export async function readWalletStores(): Promise<{
   vaultFile: WalletVaultFile | undefined;
   publicState: WalletPublicState | undefined;
 }> {
-  const localStore = await openJsonStore('local');
   const syncedStore = await openJsonStore('synced');
+  const [vaultFile, publicState] = await Promise.all([
+    syncedStore.read<WalletVaultFile>(WALLET_VAULT_PATH),
+    syncedStore.read<WalletPublicState>(WALLET_STATE_PATH),
+  ]);
   return {
-    vaultFile: await localStore.read<WalletVaultFile>(WALLET_VAULT_PATH),
-    publicState: normalizePublicState(await syncedStore.read<WalletPublicState>(WALLET_STATE_PATH)),
+    vaultFile,
+    publicState: normalizePublicState(publicState),
   };
 }
 
 export async function writeWalletStores(vaultFile: WalletVaultFile, publicState: WalletPublicState): Promise<void> {
-  const localStore = await openJsonStore('local');
   const syncedStore = await openJsonStore('synced');
-  await localStore.write(WALLET_VAULT_PATH, vaultFile);
+  await syncedStore.write(WALLET_VAULT_PATH, vaultFile);
   await syncedStore.write(WALLET_STATE_PATH, publicState);
 }
 
 export async function deleteWalletStores(): Promise<void> {
-  const localStore = await openJsonStore('local');
   const syncedStore = await openJsonStore('synced');
-  await localStore.delete(WALLET_VAULT_PATH);
+  await syncedStore.delete(WALLET_VAULT_PATH);
   await syncedStore.delete(WALLET_STATE_PATH);
 }

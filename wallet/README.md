@@ -11,7 +11,7 @@ V1 covers:
 - Account import by recovery phrase or private key.
 - Native coin transfers and preconfigured token transfers: ERC-20 on Ethereum and SPL tokens on Solana.
 - Local history for transfers submitted by this wallet, including pending and confirmed transaction status.
-- Wallet-level encryption for recovery phrases and private keys, stored inside PrivacySafe encrypted storage.
+- Wallet-level encryption for recovery phrases and private keys, stored inside PrivacySafe synced storage.
 - Wallet lock and unlock with a wallet password.
 
 ## Dependency Lock Policy
@@ -32,6 +32,15 @@ The vault stores recovery phrases as seed groups. A seed group has public metada
 Creating a new account uses the selected seed group and increments its account index. If no seed group is selected, the wallet creates a new BIP-39 recovery phrase and stores it as a new seed group. Importing a recovery phrase creates a separate seed group, so the wallet can hold multiple independent seed-backed wallets.
 
 For backup, a seed-backed account can reveal both the base recovery phrase and the derived account private key after wallet password confirmation. A private-key import can reveal only its imported private key.
+
+## Storage Mode
+
+The wallet follows Treasure's storage model and uses app synced FS for wallet data. It writes:
+
+- `wallet-vault-v1.json`: wallet-password encrypted vault containing recovery phrases, imported private keys, accounts, settings, and history.
+- `wallet-state-v1.json`: public wallet state used by the UI and service.
+
+The wallet vault is encrypted by the wallet password before it is written to PrivacySafe synced storage.
 
 The app has two RPC services:
 

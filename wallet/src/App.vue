@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
-import { DEFAULT_NETWORK_LIST, DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
+import { DEFAULT_NETWORK_LIST, DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME } from '@/lib/constants';
 import { callThisAppService } from '@/lib/json-rpc';
 import { shortAddress } from '@/lib/format';
-import { openJsonStore } from '@/lib/storage';
+import { readWalletStores } from '@/lib/vault-storage';
 import type {
   BalanceResult,
   Chain,
@@ -392,12 +392,7 @@ function selectDefaultNetworkAndAccount(): void {
 }
 
 async function loadInitialStateWithoutRpc(): Promise<void> {
-  const localStore = await openJsonStore('local');
-  const syncedStore = await openJsonStore('synced');
-  const [vaultFile, publicState] = await Promise.all([
-    localStore.read<{ updatedAt?: string }>(WALLET_VAULT_PATH),
-    syncedStore.read<WalletPublicState>(WALLET_STATE_PATH),
-  ]);
+  const { vaultFile, publicState } = await readWalletStores();
 
   state.value = normalizePublicState(publicState);
   status.value = {
