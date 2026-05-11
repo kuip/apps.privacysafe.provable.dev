@@ -144,22 +144,26 @@ export async function encryptVault(passphrase: string, vault: VaultPlain): Promi
   const iv = new Uint8Array(randomBytes(12));
   const key = await deriveVaultKey(passphrase, salt);
   const plain = new Uint8Array(utf8Bytes(JSON.stringify(vault)));
-  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
+  try {
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
 
-  return {
-    version: 1,
-    kdf: {
-      name: 'scrypt',
-      salt: bytesToBase64(salt),
-      ...SCRYPT_PARAMS,
-    },
-    cipher: {
-      name: 'AES-GCM',
-      iv: bytesToBase64(iv),
-      data: bytesToBase64(encrypted),
-    },
-    updatedAt: vault.updatedAt,
-  };
+    return {
+      version: 1,
+      kdf: {
+        name: 'scrypt',
+        salt: bytesToBase64(salt),
+        ...SCRYPT_PARAMS,
+      },
+      cipher: {
+        name: 'AES-GCM',
+        iv: bytesToBase64(iv),
+        data: bytesToBase64(encrypted),
+      },
+      updatedAt: vault.updatedAt,
+    };
+  } finally {
+    plain.fill(0);
+  }
 }
 
 export async function decryptVault(passphrase: string, file: WalletVaultFile): Promise<VaultPlain> {
