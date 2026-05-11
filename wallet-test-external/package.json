@@ -1,0 +1,25 @@
+{
+  "name": "wallet-test-external.app.provable.dev",
+  "version": "0.1.0",
+  "description": "External PrivacySafe app for testing wallet signing permissions",
+  "type": "module",
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "serve": "vite preview"
+  },
+  "dependencies": {
+    "vue": "3.5.24"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "@vitejs/plugin-vue": "5.2.4",
+    "typescript": "5.9.3",
+    "vite": "5.4.21",
+    "vue-tsc": "3.1.4"
+  }
+}

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
-import { DEFAULT_NETWORK_LIST, DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME } from '@/lib/constants';
-import { callThisAppService } from '@/lib/json-rpc';
+import { DEFAULT_NETWORK_LIST, DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME, WALLET_SERVICE_NAME } from '@/lib/constants';
+import { callThisAppService, decodeJson, encodeJson } from '@/lib/json-rpc';
 import { shortAddress } from '@/lib/format';
+import { EXTERNAL_WALLET_METHODS } from '@/lib/service-permissions';
 import { readWalletStores } from '@/lib/vault-storage';
 import type {
   BalanceResult,
@@ -13,6 +14,7 @@ import type {
   RevealAccountPrivateKeyResult,
   RevealRecoveryPhraseResult,
   SignMessageResult,
+  SignTransactionResult,
   TransactionHistoryEntry,
   TransactionStatus,
   TokenConfig,
@@ -21,6 +23,19 @@ import type {
   WalletSettings,
   WalletStatus,
 } from '@/lib/types';
+
+type CallStart = {
+  msgType: 'start';
+  callNum: number;
+  method: string;
+  data?: web3n.rpc.PassedDatum;
+};
+
+type ExternalWalletMethod = typeof EXTERNAL_WALLET_METHODS[number];
+type ApprovalResult = {
+  approved: boolean;
+  passphrase?: string;
+};
 
 const defaultSettings: WalletSettings = {
   requirePasswordForTransfers: true,
@@ -111,11 +126,24 @@ const backupDialog = reactive({
   path: '',
   copyLabel: '',
 });
+const approvalDialog = reactive({
+  open: false,
+  method: '' as ExternalWalletMethod | '',
+  title: '',
+  actionLabel: 'Approve',
+  payload: undefined as Record<string, unknown> | undefined,
+  waitingForUnlock: false,
+});
 let passwordDialogResolve: ((value: string | null) => void) | undefined;
+let approvalDialogResolve: ((value: ApprovalResult | null) => void) | undefined;
 let balanceRefreshTimer: number | undefined;
 let transferStatusRefreshTimer: number | undefined;
 let balanceRefreshSeq = 0;
 let balanceRefreshQueued = false;
+let externalWalletServiceExposed = false;
+
+const externalMethodSet = new Set<string>(EXTERNAL_WALLET_METHODS);
+const approvalRequiredMethods = new Set<string>(['transfer', 'signMessage', 'signTransaction']);
 
 const availableNetworks = computed(() => (
   state.value.networks.filter(network => (
@@ -176,6 +204,48 @@ const trackedTokenRows = computed(() => (
     error: selectedAccount.value ? balanceErrors.value[balanceKey(selectedAccount.value.id, token.id, selectedNetworkKey.value)] : undefined,
   }))
 ));
+const approvalRows = computed(() => {
+  const payload = approvalDialog.payload ?? {};
+  const accountId = typeof payload.accountId === 'string' ? payload.accountId : '';
+  const account = state.value.accounts.find(item => item.id === accountId);
+  const networkKey = typeof payload.networkKey === 'string' ? payload.networkKey : selectedNetworkKey.value;
+  const network = state.value.networks.find(item => item.key === networkKey);
+  const tokenId = typeof payload.tokenId === 'string' ? payload.tokenId : '';
+  const token = state.value.tokens.find(item => item.id === tokenId);
+  const rows = [
+    ['Requester', 'External PrivacySafe app'],
+    ['Action', approvalDialog.title || 'Wallet request'],
+  ];
+
+  if (account) {
+    rows.push(['Account', `${account.name} - ${shortAddress(account.address)}`]);
+  } else if (accountId) {
+    rows.push(['Account', accountId]);
+  }
+  if (network) {
+    rows.push(['Network', network.name]);
+  }
+
+  if (approvalDialog.method === 'transfer') {
+    const amount = typeof payload.amount === 'string' ? payload.amount : '';
+    const to = typeof payload.to === 'string' ? payload.to : '';
+    rows.push(['Asset', token?.symbol ?? network?.nativeSymbol ?? 'Native coin']);
+    if (amount) {
+      rows.push(['Amount', amount]);
+    }
+    if (to) {
+      rows.push(['Recipient', to]);
+    }
+  } else if (approvalDialog.method === 'signMessage') {
+    const message = typeof payload.message === 'string' ? payload.message : '';
+    rows.push(['Message', message.length > 240 ? `${message.slice(0, 240)}...` : message]);
+  } else if (approvalDialog.method === 'signTransaction') {
+    rows.push(['Encoding', typeof payload.encoding === 'string' ? payload.encoding : 'json']);
+    rows.push(['Transaction', approvalPayloadText(payload, 300)]);
+  }
+
+  return rows.filter(([, value]) => !!value);
+});
 
 const vaultConfirmMismatch = computed(() => (
   !status.value.exists
@@ -224,6 +294,16 @@ function stableDetails(err: unknown): string {
     }
   }
   return String(err);
+}
+
+function approvalPayloadText(value: unknown, maxLength = 2000): string {
+  let text: string;
+  try {
+    text = JSON.stringify(value, null, 2);
+  } catch {
+    text = String(value);
+  }
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
 }
 
 function errorText(err: unknown): string {
@@ -333,6 +413,199 @@ function submitPasswordDialog(): void {
 
 async function serviceCall<TRequest, TResponse>(method: string, payload: TRequest): Promise<TResponse> {
   return callThisAppService<TRequest, TResponse>(WALLET_INTERNAL_SERVICE_NAME, method, payload);
+}
+
+function approvalTitle(method: string): string {
+  switch (method) {
+    case 'transfer':
+      return 'Approve Transfer';
+    case 'signMessage':
+      return 'Approve Message Signing';
+    case 'signTransaction':
+      return 'Approve Transaction Signing';
+    default:
+      return 'Approve Wallet Request';
+  }
+}
+
+function approvalActionLabel(method: string): string {
+  switch (method) {
+    case 'transfer':
+      return 'Approve transfer';
+    case 'signMessage':
+      return 'Approve signing';
+    case 'signTransaction':
+      return 'Approve transaction';
+    default:
+      return 'Approve';
+  }
+}
+
+function externalRequestNeedsPassword(method: string): boolean {
+  const settings = state.value.settings;
+  if (method === 'transfer') {
+    return settings.requirePasswordForTransfers;
+  }
+  if (method === 'signMessage') {
+    return settings.requirePasswordForMessageSigning;
+  }
+  if (method === 'signTransaction') {
+    return settings.requirePasswordForTransactionSigning;
+  }
+  return false;
+}
+
+async function requestExternalApproval(
+  method: ExternalWalletMethod,
+  payload: Record<string, unknown>,
+): Promise<ApprovalResult | null> {
+  if (approvalDialogResolve) {
+    throw new Error('Wallet is already reviewing another external request.');
+  }
+
+  approvalDialog.open = true;
+  approvalDialog.method = method;
+  approvalDialog.title = approvalTitle(method);
+  approvalDialog.actionLabel = approvalActionLabel(method);
+  approvalDialog.payload = payload;
+  approvalDialog.waitingForUnlock = !status.value.unlocked;
+  activeTab.value = 'home';
+
+  return new Promise(resolve => {
+    approvalDialogResolve = resolve;
+  });
+}
+
+function closeExternalApproval(): void {
+  approvalDialog.open = false;
+  approvalDialog.method = '';
+  approvalDialog.title = '';
+  approvalDialog.actionLabel = 'Approve';
+  approvalDialog.payload = undefined;
+  approvalDialog.waitingForUnlock = false;
+  approvalDialogResolve = undefined;
+}
+
+function rejectExternalApproval(): void {
+  approvalDialogResolve?.(null);
+  closeExternalApproval();
+}
+
+async function approveExternalApproval(): Promise<void> {
+  if (!approvalDialog.method) {
+    return;
+  }
+
+  let passphrase: string | undefined;
+  if (externalRequestNeedsPassword(approvalDialog.method)) {
+    const confirmedPassphrase = await requestWalletPassword('Confirm External Request', 'Approve');
+    if (!confirmedPassphrase) {
+      return;
+    }
+    passphrase = confirmedPassphrase;
+  }
+
+  approvalDialogResolve?.({ approved: true, passphrase });
+  closeExternalApproval();
+}
+
+async function handleExternalWalletMethod(method: string, payload: unknown): Promise<unknown> {
+  if (!externalMethodSet.has(method)) {
+    throw new Error(`Method ${method} is not exposed by ${WALLET_SERVICE_NAME}.`);
+  }
+
+  if (!approvalRequiredMethods.has(method)) {
+    return serviceCall(method, payload);
+  }
+
+  const requestPayload = (typeof payload === 'object' && payload)
+    ? { ...(payload as Record<string, unknown>) }
+    : {};
+  delete requestPayload.passphrase;
+
+  const approval = await requestExternalApproval(method as ExternalWalletMethod, requestPayload);
+  if (!approval?.approved) {
+    throw new Error('User rejected wallet request.');
+  }
+
+  const result = await serviceCall(method, {
+    ...requestPayload,
+    passphrase: approval.passphrase,
+  });
+  await syncExternalWalletResult(method, requestPayload, result);
+  return result;
+}
+
+async function syncExternalWalletResult(
+  method: string,
+  payload: Record<string, unknown>,
+  result: unknown,
+): Promise<void> {
+  if (method !== 'transfer') {
+    return;
+  }
+
+  await refresh();
+
+  const accountId = typeof payload.accountId === 'string' ? payload.accountId : '';
+  const networkKey = typeof payload.networkKey === 'string' ? payload.networkKey : '';
+  if (networkKey && state.value.networks.some(network => network.key === networkKey)) {
+    selectedNetworkKey.value = networkKey;
+  }
+  if (accountId && state.value.accounts.some(account => account.id === accountId)) {
+    selectedAccountId.value = accountId;
+  }
+  activeTab.value = 'history';
+  await refreshSelectedBalances();
+
+  const transferResult = result as Partial<TransferResult>;
+  if (transferResult.status === 'pending' && typeof transferResult.accountId === 'string' && typeof transferResult.signature === 'string') {
+    pollPendingTransfer(transferResult.accountId, transferResult.signature);
+  }
+}
+
+async function handleExternalWalletCall(connection: web3n.rpc.Connection, call: CallStart): Promise<void> {
+  const { callNum, method, data } = call;
+  try {
+    const result = await handleExternalWalletMethod(method, decodeJson(data));
+    await connection.send({
+      callNum,
+      callStatus: 'end',
+      data: encodeJson(result),
+    });
+  } catch (err) {
+    await connection.send({
+      callNum,
+      callStatus: 'error',
+      err: err instanceof Error ? { message: err.message } : err,
+    });
+  }
+}
+
+function exposeExternalWalletService(): void {
+  if (externalWalletServiceExposed || !w3n.rpc?.exposeService) {
+    return;
+  }
+  externalWalletServiceExposed = true;
+  w3n.rpc.exposeService(WALLET_SERVICE_NAME, {
+    next(connection) {
+      connection.watch({
+        next: message => {
+          const call = message as Partial<CallStart>;
+          if (call.msgType === 'start') {
+            void handleExternalWalletCall(connection, call as CallStart);
+          }
+        },
+        error: err => {
+          void w3n.log?.('error', 'Wallet external signer connection failed', err);
+        },
+      });
+    },
+    error: err => {
+      externalWalletServiceExposed = false;
+      void w3n.log?.('error', 'Wallet failed to expose external signer service', err);
+    },
+  });
 }
 
 function syncSettingsForm(): void {
@@ -898,6 +1171,11 @@ function setHistoryPage(nextPage: number): void {
 }
 
 watch(() => state.value.settings, syncSettingsForm, { deep: true });
+watch(() => status.value.unlocked, unlocked => {
+  if (unlocked && approvalDialog.open) {
+    approvalDialog.waitingForUnlock = false;
+  }
+});
 watch(() => state.value.settings.enableDevelopmentNetworks, () => {
   selectDefaultNetworkAndAccount();
 });
@@ -928,6 +1206,7 @@ watch(() => compatibleTokens.value.map(token => token.id).join(','), () => {
 });
 
 onMounted(async () => {
+  exposeExternalWalletService();
   await run(loadInitialStateWithoutRpc);
   await run(refresh);
   void refreshSelectedBalances();
@@ -937,6 +1216,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (approvalDialogResolve) {
+    approvalDialogResolve(null);
+  }
   if (balanceRefreshTimer !== undefined) {
     window.clearInterval(balanceRefreshTimer);
   }
@@ -964,6 +1246,17 @@ onUnmounted(() => {
               ? 'Enter your wallet password.'
               : 'Choose a wallet password to encrypt recovery phrases and private keys.' }}
           </p>
+          <p v-if="approvalDialog.open" class="external-request-note">
+            External PrivacySafe app is waiting for wallet approval. Unlock the wallet to review the request.
+          </p>
+          <button
+            v-if="approvalDialog.open"
+            class="btn btn--secondary"
+            :disabled="busy"
+            @click="rejectExternalApproval"
+          >
+            Reject external request
+          </button>
         </div>
 
         <div class="form-stack">
@@ -1483,6 +1776,44 @@ onUnmounted(() => {
         :details="errorDetails"
         @close="clearError"
       />
+
+      <div v-if="approvalDialog.open && status.unlocked" class="modal-backdrop" @click.self="rejectExternalApproval">
+        <section class="password-modal approval-modal" role="dialog" aria-modal="true" :aria-labelledby="'approval-dialog-title'">
+          <div class="panel__header">
+            <div>
+              <h2 id="approval-dialog-title">{{ approvalDialog.title }}</h2>
+              <p class="approval-subtitle">External PrivacySafe app is requesting wallet access.</p>
+            </div>
+            <button
+              class="error-notice__close"
+              :disabled="busy"
+              title="Reject"
+              aria-label="Reject"
+              @click="rejectExternalApproval"
+            >
+              ×
+            </button>
+          </div>
+          <dl class="approval-details">
+            <div v-for="row in approvalRows" :key="row[0]">
+              <dt>{{ row[0] }}</dt>
+              <dd>{{ row[1] }}</dd>
+            </div>
+          </dl>
+          <details class="approval-raw">
+            <summary>Request details</summary>
+            <pre>{{ approvalPayloadText(approvalDialog.payload) }}</pre>
+          </details>
+          <div class="modal-actions">
+            <button class="btn btn--secondary" :disabled="busy" @click="rejectExternalApproval">
+              Reject
+            </button>
+            <button class="btn btn--primary" :disabled="busy" @click="approveExternalApproval">
+              {{ approvalDialog.actionLabel }}
+            </button>
+          </div>
+        </section>
+      </div>
 
       <div v-if="passwordDialog.open" class="modal-backdrop" @click.self="closePasswordDialog">
         <section class="password-modal" role="dialog" aria-modal="true" :aria-labelledby="'password-dialog-title'">

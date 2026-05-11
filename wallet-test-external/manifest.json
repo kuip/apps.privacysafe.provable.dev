@@ -1,0 +1,46 @@
+{
+  "name": "Wallet External Test",
+  "appDomain": "wallet-test-external.app.provable.dev",
+  "icon": "logo.svg",
+  "description": "Test app for external PrivacySafe wallet signing requests.",
+  "version": "0.1.0",
+  "components": {
+    "/index.html": {
+      "runtime": "web-gui",
+      "startedBy": "user",
+      "formFactor": [
+        "desktop",
+        "tablet",
+        "phone"
+      ],
+      "capsRequested": {
+        "otherAppsRPC": [
+          {
+            "app": "wallet.app.provable.dev",
+            "service": "WalletSigner"
+          }
+        ],
+        "logToPlatform": true
+      },
+      "windowOpts": {
+        "width": 720,
+        "height": 620,
+        "minWidth": 520,
+        "minHeight": 520
+      }
+    }
+  },
+  "launchers": [
+    {
+      "name": "Wallet External Test",
+      "icon": "logo.svg",
+      "description": "Test app for external PrivacySafe wallet signing requests.",
+      "component": "/index.html",
+      "formFactor": [
+        "desktop",
+        "tablet",
+        "phone"
+      ]
+    }
+  ]
+}

@@ -13,6 +13,12 @@
         "tablet",
         "phone"
       ],
+      "services": {
+        "WalletSigner": {
+          "thisAppComponents": "*",
+          "otherApps": "*"
+        }
+      },
       "capsRequested": {
         "appRPC": [
           "WalletInternal"
@@ -85,10 +91,6 @@
       "services": {
         "WalletInternal": {
           "thisAppComponents": "*"
-        },
-        "WalletSigner": {
-          "thisAppComponents": "*",
-          "otherApps": "*"
         }
       },
       "capsRequested": {

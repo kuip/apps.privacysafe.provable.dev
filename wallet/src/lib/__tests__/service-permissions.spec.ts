@@ -28,12 +28,14 @@ describe('service permission surface', () => {
     ]));
   });
 
-  it('keeps WalletInternal private and WalletSigner available to other apps', () => {
-    const services = manifest.components['/walletDenoServices.js'].services;
+  it('keeps WalletInternal private and WalletSigner available to other apps through the wallet UI', () => {
+    const uiServices = manifest.components['/index.html'].services;
+    const denoServices = manifest.components['/walletDenoServices.js'].services;
 
-    expect(services.WalletInternal).toEqual({ thisAppComponents: '*' });
-    expect(services.WalletInternal).not.toHaveProperty('otherApps');
-    expect(services.WalletSigner).toMatchObject({
+    expect(denoServices.WalletInternal).toEqual({ thisAppComponents: '*' });
+    expect(denoServices.WalletInternal).not.toHaveProperty('otherApps');
+    expect(denoServices).not.toHaveProperty('WalletSigner');
+    expect(uiServices.WalletSigner).toMatchObject({
       thisAppComponents: '*',
       otherApps: '*',
     });

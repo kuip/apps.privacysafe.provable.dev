@@ -1,6 +1,6 @@
-import { WALLET_INTERNAL_SERVICE_NAME, WALLET_SERVICE_NAME } from '@/lib/constants';
+import { WALLET_INTERNAL_SERVICE_NAME } from '@/lib/constants';
 import { decodeJson, encodeJson } from '@/lib/json-rpc';
-import { EXTERNAL_WALLET_METHODS, INTERNAL_WALLET_METHODS } from '@/lib/service-permissions';
+import { INTERNAL_WALLET_METHODS } from '@/lib/service-permissions';
 import { WalletService } from '@/lib/wallet-service';
 import type {
   BalanceRequest,
@@ -29,7 +29,6 @@ type IncomingConnection = web3n.rpc.Connection;
 
 const service = new WalletService();
 const internalMethods = new Set(INTERNAL_WALLET_METHODS);
-const externalMethods = new Set(EXTERNAL_WALLET_METHODS);
 
 type RuntimeGlobal = typeof globalThis & {
   document?: Document;
@@ -179,9 +178,8 @@ async function bootstrapService(attempt = 0): Promise<void> {
   try {
     await service.initialize();
     exposeWalletService(WALLET_INTERNAL_SERVICE_NAME, internalMethods);
-    exposeWalletService(WALLET_SERVICE_NAME, externalMethods);
     updateStatus('Wallet service waiting for requests.');
-    await runtime.log?.('info', 'Wallet services exposed');
+    await runtime.log?.('info', 'Wallet internal service exposed');
   } catch (err) {
     await reportServiceError('failed during startup', err);
   }
