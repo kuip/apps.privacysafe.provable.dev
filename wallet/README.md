@@ -4,12 +4,17 @@ Minimal PrivacySafe wallet app.
 
 V1 covers:
 - Ethereum and Solana support on mainnet and configured testnets.
-- Account creation from BIP-39 seed phrases, with each new account deriving the next account index.
+- Account creation from BIP-39 seed phrases, with seed groups deriving additional accounts by index.
 - Account import by seed phrase or private key.
-- Native coin transfers and preconfigured token transfers: ERC-20 on Ethereum and SPL tokens on Solana.
-- Local history for transfers submitted by this wallet, including pending and confirmed transaction status.
+- Native coin balances and transfers.
+- Preconfigured token balances and transfers: ERC-20 on Ethereum and SPL tokens on Solana.
+- Message signing and raw transaction signing for wallet accounts.
+- External PrivacySafe app requests through `WalletSigner`, with wallet approval UI prompts for user confirmation, for transfers, message signing, and transaction signing.
+- Wallet-scoped transfer history for transactions submitted by this wallet, including pending, confirmed, failed, and not-included status.
+- Password-protected reveal/export of recovery phrases and imported private keys.
 - Wallet-level encryption for seed phrases and private keys, stored inside PrivacySafe synced storage.
 - Wallet lock and unlock with a wallet password.
+- Settings for requiring wallet password confirmation before transfers, message signing, and transaction signing.
 
 ## Dependency Lock Policy
 
