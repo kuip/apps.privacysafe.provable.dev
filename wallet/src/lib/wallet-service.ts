@@ -1,6 +1,5 @@
 import { ethers } from 'ethers';
 import {
-  Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -28,6 +27,7 @@ import {
   utf8Bytes,
   utf8String,
 } from '@/lib/format';
+import { jsonRpcWithFallback, rpcUserMessage } from '@/lib/rpc-client';
 import { openJsonStore } from '@/lib/storage';
 import type {
   AccountSecret,
@@ -101,6 +101,7 @@ const DEFAULT_SETTINGS: WalletSettings = {
 };
 const RPC_REQUEST_TIMEOUT_MS = 12000;
 const TX_CONFIRM_TIMEOUT_MS = 120000;
+const PENDING_TX_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -314,24 +315,6 @@ function solanaExplorer(signature: string, network?: NetworkConfig): string {
   return `https://explorer.solana.com/tx/${signature}${cluster}`;
 }
 
-function errorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === 'object' && err && 'message' in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return String(err);
-}
-
-type JsonRpcResponse<T> = {
-  result?: T;
-  error?: {
-    code?: number;
-    message?: string;
-  };
-};
-
 type SolanaAccountInfoResult = {
   value: unknown | null;
 };
@@ -408,6 +391,7 @@ export class WalletService {
     this.vault = await decryptVault(request.passphrase, this.vaultFile);
     this.passphrase = request.passphrase;
     this.publicState = publicStateFromVault(this.vault);
+    this.recoverPendingTransactions();
     return this.publicState;
   }
 
@@ -645,13 +629,9 @@ export class WalletService {
         ? this.getEthereumNativeBalance(account, network)
         : this.getSolanaNativeBalance(account, network);
     } catch (err) {
-      if (/Could not reach .* RPC endpoint/i.test(errorMessage(err))) {
-        throw err;
-      }
-      if (this.isNetworkFetchError(err)) {
-        throw new Error(
-          `Could not reach ${account.chain === 'ethereum' ? 'Ethereum' : 'Solana'} RPC endpoint. Balance is unavailable right now.`,
-        );
+      const message = rpcUserMessage(err);
+      if (message) {
+        throw new Error(message);
       }
       throw err;
     }
@@ -954,6 +934,42 @@ export class WalletService {
     });
   }
 
+  private recoverPendingTransactions(): void {
+    if (!this.vault) {
+      return;
+    }
+    const now = Date.now();
+    let markedStale = false;
+    for (const entry of this.vault.history ?? []) {
+      if (entry.status !== 'pending') {
+        continue;
+      }
+      const createdAt = Date.parse(entry.createdAt);
+      if (!Number.isNaN(createdAt) && now - createdAt > PENDING_TX_RECOVERY_MAX_AGE_MS) {
+        entry.status = 'not_included';
+        markedStale = true;
+        continue;
+      }
+      const account = this.vault.accounts.find(item => item.id === entry.accountId);
+      const network = [...DEFAULT_NETWORK_LIST].find(item => item.key === entry.networkKey && item.chain === entry.chain) as NetworkConfig | undefined;
+      if (!account || !network) {
+        continue;
+      }
+      this.refreshTransactionHistoryStatus(account, network, {
+        accountId: entry.accountId,
+        chain: entry.chain,
+        signature: entry.signature,
+        status: 'pending',
+        explorerUrl: entry.explorerUrl,
+      });
+    }
+    if (markedStale) {
+      void this.persist().catch(err => {
+        void w3n.log?.('error', 'Wallet failed to persist stale pending transaction recovery', err);
+      });
+    }
+  }
+
   private async getAccount(accountIdToFind: string): Promise<WalletAccount> {
     const accounts = this.vault?.accounts ?? (await this.getPublicState()).accounts;
     const account = accounts.find(item => item.id === accountIdToFind);
@@ -993,168 +1009,93 @@ export class WalletService {
     return new ethers.JsonRpcProvider(rpcUrl, network.chainId);
   }
 
-  private solanaConnection(network: NetworkConfig, rpcUrl: string = network.rpcUrl): Connection {
-    return new Connection(rpcUrl, 'confirmed');
-  }
-
-  private isNetworkFetchError(err: unknown): boolean {
-    const text = err instanceof Error
-      ? `${err.message}\n${err.stack ?? ''}`
-      : typeof err === 'object' && err
-        ? JSON.stringify(err)
-        : String(err);
-    return /Failed to fetch|network|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|timed out|timeout|HTTP (403|408|425|429|5\d\d)|Too many connections|rate limit|forbidden/i.test(text);
-  }
-
-  private async withRpcFallback<T>(
+  private async rpc<T>(
     chain: Chain,
-    urls: string[],
-    operation: (rpcUrl: string) => Promise<T>,
-  ): Promise<T> {
-    let lastError: unknown;
-    const attempts: string[] = [];
-    for (const url of urls) {
-      try {
-        return await operation(url);
-      } catch (err) {
-        attempts.push(`${url}: ${errorMessage(err)}`);
-        if (!this.isNetworkFetchError(err)) {
-          throw err;
-        }
-        lastError = err;
-      }
-    }
-    await w3n.log?.('error', `Wallet could not reach ${chain} RPC endpoints: ${attempts.join(' | ')}`, lastError);
-    throw new Error(
-      `Could not reach ${chain === 'ethereum' ? 'Ethereum' : 'Solana'} RPC endpoint. Balance is unavailable right now. Tried ${urls.length} endpoints: ${attempts.join(' | ')}`,
-    );
-  }
-
-  private async jsonRpc<T>(
-    rpcUrl: string,
+    network: NetworkConfig,
     method: string,
     params: unknown[],
-    contentType = 'application/json',
+    label: string,
   ): Promise<T> {
-    let response: Response;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), RPC_REQUEST_TIMEOUT_MS);
-    try {
-      response = await fetch(rpcUrl, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': contentType,
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: Date.now(),
-          method,
-          params,
-        }),
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new Error(`RPC ${method} timed out for ${rpcUrl} after ${RPC_REQUEST_TIMEOUT_MS}ms.`);
-      }
-      throw new Error(`RPC ${method} fetch failed for ${rpcUrl}: ${errorMessage(err)}`);
-    } finally {
-      clearTimeout(timeout);
-    }
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`RPC ${method} failed for ${rpcUrl} with HTTP ${response.status}${body ? `: ${body.slice(0, 240)}` : ''}.`);
-    }
-    const payload = await response.json() as JsonRpcResponse<T>;
-    if (payload.error) {
-      const code = payload.error.code === undefined ? '' : ` ${payload.error.code}`;
-      throw new Error(`RPC ${method} failed for ${rpcUrl}${code}: ${payload.error.message ?? 'Unknown RPC error'}.`);
-    }
-    if (payload.result === undefined) {
-      throw new Error(`RPC ${method} returned no result from ${rpcUrl}.`);
-    }
-    return payload.result;
+    return jsonRpcWithFallback<T>({
+      chain,
+      endpoints: this.rpcUrls(network),
+      method,
+      params,
+      label,
+      timeoutMs: RPC_REQUEST_TIMEOUT_MS,
+      logError: async (message, err) => {
+        await w3n.log?.('error', message, err);
+      },
+    });
   }
 
   private async getEthereumNativeBalance(account: WalletAccount, network: NetworkConfig): Promise<BalanceResult> {
-    return this.withRpcFallback('ethereum', this.rpcUrls(network), async rpcUrl => {
-      const rawHex = await this.jsonRpc<string>(
-        rpcUrl,
-        'eth_getBalance',
-        [account.address, 'latest'],
-      );
-      const raw = BigInt(rawHex);
-      return {
-        accountId: account.id,
-        symbol: network.nativeSymbol,
-        raw: raw.toString(),
-        formatted: formatUnits(raw, 18),
-      };
-    });
+    const rawHex = await this.rpc<string>('ethereum', network, 'eth_getBalance', [account.address, 'latest'], 'native balance');
+    const raw = BigInt(rawHex);
+    return {
+      accountId: account.id,
+      symbol: network.nativeSymbol,
+      raw: raw.toString(),
+      formatted: formatUnits(raw, 18),
+    };
   }
 
   private async getSolanaNativeBalance(account: WalletAccount, network: NetworkConfig): Promise<BalanceResult> {
-    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
-      const result = await this.jsonRpc<SolanaBalanceResult>(rpcUrl, 'getBalance', [account.address]);
-      const raw = result.value;
-      return {
-        accountId: account.id,
-        symbol: network.nativeSymbol,
-        raw: String(raw),
-        formatted: String(raw / LAMPORTS_PER_SOL),
-      };
-    });
+    const result = await this.rpc<SolanaBalanceResult>('solana', network, 'getBalance', [account.address], 'native balance');
+    const raw = result.value;
+    return {
+      accountId: account.id,
+      symbol: network.nativeSymbol,
+      raw: String(raw),
+      formatted: String(raw / LAMPORTS_PER_SOL),
+    };
   }
 
   private async getEthereumTokenBalance(account: WalletAccount, network: NetworkConfig, token: TokenConfig): Promise<BalanceResult> {
-    return this.withRpcFallback('ethereum', this.rpcUrls(network), async rpcUrl => {
-      const data = ERC20_INTERFACE.encodeFunctionData('balanceOf', [account.address]);
-      const rawHex = await this.jsonRpc<string>(
-        rpcUrl,
-        'eth_call',
-        [{ to: token.address, data }, 'latest'],
-      );
-      const [raw] = ERC20_INTERFACE.decodeFunctionResult('balanceOf', rawHex) as unknown as [bigint];
-      return {
-        accountId: account.id,
-        symbol: token.symbol,
-        raw: raw.toString(),
-        formatted: formatUnits(raw, token.decimals),
-      };
-    });
+    const data = ERC20_INTERFACE.encodeFunctionData('balanceOf', [account.address]);
+    const rawHex = await this.rpc<string>(
+      'ethereum',
+      network,
+      'eth_call',
+      [{ to: token.address, data }, 'latest'],
+      `${token.symbol} token balance`,
+    );
+    const [raw] = ERC20_INTERFACE.decodeFunctionResult('balanceOf', rawHex) as unknown as [bigint];
+    return {
+      accountId: account.id,
+      symbol: token.symbol,
+      raw: raw.toString(),
+      formatted: formatUnits(raw, token.decimals),
+    };
   }
 
   private async getSolanaTokenBalance(account: WalletAccount, network: NetworkConfig, token: TokenConfig): Promise<BalanceResult> {
-    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
-      const tokenAccount = await getAssociatedTokenAddress(
-        new PublicKey(token.address),
-        new PublicKey(account.address),
-      );
-      const accountInfo = await this.jsonRpc<SolanaAccountInfoResult>(rpcUrl, 'getAccountInfo', [
-        tokenAccount.toBase58(),
-        { encoding: 'base64' },
-      ]);
-      if (!accountInfo.value) {
-        return {
-          accountId: account.id,
-          symbol: token.symbol,
-          raw: '0',
-          formatted: formatUnits(0n, token.decimals),
-        };
-      }
-      const balance = await this.jsonRpc<SolanaTokenBalanceResult>(rpcUrl, 'getTokenAccountBalance', [
-        tokenAccount.toBase58(),
-      ]);
-      const raw = BigInt(balance.value.amount ?? '0');
+    const tokenAccount = await getAssociatedTokenAddress(
+      new PublicKey(token.address),
+      new PublicKey(account.address),
+    );
+    const accountInfo = await this.rpc<SolanaAccountInfoResult>('solana', network, 'getAccountInfo', [
+      tokenAccount.toBase58(),
+      { encoding: 'base64' },
+    ], `${token.symbol} token account lookup`);
+    if (!accountInfo.value) {
       return {
         accountId: account.id,
         symbol: token.symbol,
-        raw: raw.toString(),
-        formatted: formatUnits(raw, token.decimals),
+        raw: '0',
+        formatted: formatUnits(0n, token.decimals),
       };
-    });
+    }
+    const balance = await this.rpc<SolanaTokenBalanceResult>('solana', network, 'getTokenAccountBalance', [
+      tokenAccount.toBase58(),
+    ], `${token.symbol} token balance`);
+    const raw = BigInt(balance.value.amount ?? '0');
+    return {
+      accountId: account.id,
+      symbol: token.symbol,
+      raw: raw.toString(),
+      formatted: formatUnits(raw, token.decimals),
+    };
   }
 
   private async transferEthereumNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
@@ -1261,9 +1202,13 @@ export class WalletService {
     let seenPending = false;
     try {
       while (Date.now() - startedAt < TX_CONFIRM_TIMEOUT_MS) {
-        const receipt = await this.withRpcFallback('ethereum', this.rpcUrls(network), async rpcUrl => (
-          this.jsonRpc<EthereumTransactionReceiptResult>(rpcUrl, 'eth_getTransactionReceipt', [txHash])
-        ));
+        const receipt = await this.rpc<EthereumTransactionReceiptResult>(
+          'ethereum',
+          network,
+          'eth_getTransactionReceipt',
+          [txHash],
+          'transaction receipt lookup',
+        );
         if (receipt) {
           const blockNumber = receipt.blockNumber ? Number.parseInt(receipt.blockNumber, 16) : undefined;
           return {
@@ -1282,13 +1227,11 @@ export class WalletService {
   }
 
   private async solanaAccountExists(network: NetworkConfig, publicKey: PublicKey): Promise<boolean> {
-    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
-      const result = await this.jsonRpc<SolanaAccountInfoResult>(rpcUrl, 'getAccountInfo', [
-        publicKey.toBase58(),
-        { encoding: 'base64' },
-      ]);
-      return !!result.value;
-    });
+    const result = await this.rpc<SolanaAccountInfoResult>('solana', network, 'getAccountInfo', [
+      publicKey.toBase58(),
+      { encoding: 'base64' },
+    ], 'Solana account lookup');
+    return !!result.value;
   }
 
   private async sendSolanaTransaction(
@@ -1296,23 +1239,21 @@ export class WalletService {
     transaction: Transaction,
     signer: Keypair,
   ): Promise<string> {
-    return this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => {
-      const latest = await this.jsonRpc<SolanaLatestBlockhashResult>(rpcUrl, 'getLatestBlockhash', [
-        { commitment: 'confirmed' },
-      ]);
-      transaction.feePayer = signer.publicKey;
-      transaction.recentBlockhash = latest.value.blockhash;
-      transaction.sign(signer);
-      const rawTransaction = bytesToBase64(transaction.serialize());
-      return this.jsonRpc<string>(rpcUrl, 'sendTransaction', [
-        rawTransaction,
-        {
-          encoding: 'base64',
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        },
-      ]);
-    });
+    const latest = await this.rpc<SolanaLatestBlockhashResult>('solana', network, 'getLatestBlockhash', [
+      { commitment: 'confirmed' },
+    ], 'latest blockhash lookup');
+    transaction.feePayer = signer.publicKey;
+    transaction.recentBlockhash = latest.value.blockhash;
+    transaction.sign(signer);
+    const rawTransaction = bytesToBase64(transaction.serialize());
+    return this.rpc<string>('solana', network, 'sendTransaction', [
+      rawTransaction,
+      {
+        encoding: 'base64',
+        preflightCommitment: 'confirmed',
+        maxRetries: 3,
+      },
+    ], 'transaction broadcast');
   }
 
   private async waitForSolanaConfirmation(
@@ -1323,12 +1264,10 @@ export class WalletService {
     let seenPending = false;
     try {
       while (Date.now() - startedAt < TX_CONFIRM_TIMEOUT_MS) {
-        const result = await this.withRpcFallback('solana', this.rpcUrls(network), async rpcUrl => (
-          this.jsonRpc<SolanaSignatureStatusesResult>(rpcUrl, 'getSignatureStatuses', [
-            [signature],
-            { searchTransactionHistory: true },
-          ])
-        ));
+        const result = await this.rpc<SolanaSignatureStatusesResult>('solana', network, 'getSignatureStatuses', [
+          [signature],
+          { searchTransactionHistory: true },
+        ], 'signature status lookup');
         const status = result.value[0];
         if (status) {
           if (status.err) {
