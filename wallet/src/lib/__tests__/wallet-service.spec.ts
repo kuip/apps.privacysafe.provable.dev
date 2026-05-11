@@ -24,6 +24,13 @@ async function unlockedService(passphrase = TEST_PASSWORD): Promise<WalletServic
 }
 
 describe('WalletService lifecycle with mocked storage', () => {
+  it('requires at least 4 characters when creating a wallet password', async () => {
+    const service = new WalletService();
+    await service.initialize();
+
+    await expect(service.unlock({ passphrase: '123' })).rejects.toThrow('Wallet password must be at least 4 characters.');
+  });
+
   it('first unlock creates vault and state files', async () => {
     const service = await unlockedService();
     const raw = getMockStores().synced.dump();
@@ -84,6 +91,51 @@ describe('create and import flows', () => {
     expect(second.state.seedGroups.find(group => group.id === first.seedGroupId)?.nextAccountIndex).toBe(2);
   });
 
+  it('stores expected derivation paths for mnemonic accounts', async () => {
+    const service = await unlockedService();
+    const first = await service.createAccount({ name: 'Main' });
+    const second = await service.createAccount({ seedGroupId: first.seedGroupId, name: 'Second' });
+
+    expect(second.state.accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        chain: 'ethereum',
+        accountIndex: 0,
+        derivationPath: "m/44'/60'/0'/0/0",
+      }),
+      expect.objectContaining({
+        chain: 'solana',
+        accountIndex: 0,
+        derivationPath: "m/44'/501'/0'/0'",
+      }),
+      expect.objectContaining({
+        chain: 'ethereum',
+        accountIndex: 1,
+        derivationPath: "m/44'/60'/0'/0/1",
+      }),
+      expect.objectContaining({
+        chain: 'solana',
+        accountIndex: 1,
+        derivationPath: "m/44'/501'/1'/0'",
+      }),
+    ]));
+  });
+
+  it('imports a mnemonic at the requested account index and advances the seed group index', async () => {
+    const service = await unlockedService();
+    const state = await service.importMnemonic({
+      mnemonic: TEST_MNEMONIC,
+      chains: ['ethereum', 'solana'],
+      accountIndex: 3,
+      name: 'Index three',
+    });
+
+    expect(state.seedGroups[0].nextAccountIndex).toBe(4);
+    expect(state.accounts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ chain: 'ethereum', accountIndex: 3, derivationPath: "m/44'/60'/0'/0/3" }),
+      expect.objectContaining({ chain: 'solana', accountIndex: 3, derivationPath: "m/44'/501'/3'/0'" }),
+    ]));
+  });
+
   it('imports a mnemonic as a separate seed group', async () => {
     const service = await unlockedService();
     await service.createAccount({ name: 'Generated' });
@@ -109,6 +161,9 @@ describe('create and import flows', () => {
 
     expect(state.accounts).toHaveLength(1);
     expect(state.accounts[0].secretKind).toBe('private-key');
+    expect(state.accounts[0]).not.toHaveProperty('seedGroupId');
+    expect(state.accounts[0]).not.toHaveProperty('accountIndex');
+    expect(state.accounts[0]).not.toHaveProperty('derivationPath');
     expect(JSON.stringify(raw[WALLET_STATE_PATH])).not.toContain(TEST_ETH_PRIVATE_KEY);
     expect(Object.values(decrypted.secrets).some(secret => secret.privateKey === TEST_ETH_PRIVATE_KEY)).toBe(true);
   });
@@ -187,6 +242,54 @@ describe('signing', () => {
       .resolves.toMatchObject({ accountId: account.id });
     await expect(service.signMessage({ accountId: account.id, message: 'hello', passphrase: WRONG_PASSWORD }))
       .rejects.toThrow();
+  });
+
+  it('enforces password-required transaction signing setting', async () => {
+    const service = await unlockedService();
+    const { state } = await service.createAccount({ name: 'Main' });
+    const account = state.accounts.find(item => item.chain === 'ethereum')!;
+    const transaction = {
+      to: '0x0000000000000000000000000000000000000001',
+      value: 1n,
+      nonce: 0,
+      gasLimit: 21000n,
+      gasPrice: 1n,
+      chainId: 1,
+    };
+
+    await expect(service.signTransaction({ accountId: account.id, transaction }))
+      .rejects.toThrow('Wallet password confirmation is required.');
+    await expect(service.signTransaction({ accountId: account.id, transaction, passphrase: TEST_PASSWORD }))
+      .resolves.toMatchObject({ accountId: account.id, chain: 'ethereum', encoding: 'hex' });
+  });
+});
+
+describe('password rules', () => {
+  it('enforces password confirmation before transfers when configured', async () => {
+    const service = await unlockedService();
+    const { state } = await service.createAccount({ name: 'Main' });
+    const account = state.accounts.find(item => item.chain === 'ethereum')!;
+
+    await expect(service.transfer({
+      accountId: account.id,
+      to: '0x0000000000000000000000000000000000000001',
+      amount: '0.01',
+    })).rejects.toThrow('Wallet password confirmation is required.');
+    await expect(service.transfer({
+      accountId: account.id,
+      to: '0x0000000000000000000000000000000000000001',
+      amount: '0.01',
+      passphrase: WRONG_PASSWORD,
+    })).rejects.toThrow();
+  });
+
+  it('rejects too-short new wallet passwords', async () => {
+    const service = await unlockedService();
+
+    await expect(service.changePassphrase({
+      currentPassphrase: TEST_PASSWORD,
+      newPassphrase: '123',
+    })).rejects.toThrow('New wallet password must be at least 4 characters.');
   });
 });
 

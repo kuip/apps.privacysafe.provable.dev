@@ -1,5 +1,6 @@
 import { WALLET_INTERNAL_SERVICE_NAME, WALLET_SERVICE_NAME } from '@/lib/constants';
 import { decodeJson, encodeJson } from '@/lib/json-rpc';
+import { EXTERNAL_WALLET_METHODS, INTERNAL_WALLET_METHODS } from '@/lib/service-permissions';
 import { WalletService } from '@/lib/wallet-service';
 import type {
   BalanceRequest,
@@ -27,33 +28,8 @@ type CallStart = {
 type IncomingConnection = web3n.rpc.Connection;
 
 const service = new WalletService();
-const internalMethods = new Set([
-  'status',
-  'createAccount',
-  'unlock',
-  'lock',
-  'getPublicState',
-  'listAccounts',
-  'updateSettings',
-  'changePassphrase',
-  'resetVault',
-  'revealRecoveryPhrase',
-  'revealAccountPrivateKey',
-  'importMnemonic',
-  'importPrivateKey',
-  'getBalance',
-  'transfer',
-  'signMessage',
-  'signTransaction',
-]);
-const externalMethods = new Set([
-  'getPublicState',
-  'listAccounts',
-  'getBalance',
-  'transfer',
-  'signMessage',
-  'signTransaction',
-]);
+const internalMethods = new Set(INTERNAL_WALLET_METHODS);
+const externalMethods = new Set(EXTERNAL_WALLET_METHODS);
 
 type RuntimeGlobal = typeof globalThis & {
   document?: Document;
