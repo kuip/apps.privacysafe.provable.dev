@@ -1,6 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import AddAccountTab from '@/components/AddAccountTab.vue';
+import ApprovalDialog from '@/components/ApprovalDialog.vue';
+import BackupDialog from '@/components/BackupDialog.vue';
 import ErrorNotice from '@/components/ErrorNotice.vue';
+import HistoryTab from '@/components/HistoryTab.vue';
+import HomeTab from '@/components/HomeTab.vue';
+import PasswordDialog from '@/components/PasswordDialog.vue';
+import SettingsTab from '@/components/SettingsTab.vue';
+import VaultGate from '@/components/VaultGate.vue';
+import WalletHeader from '@/components/WalletHeader.vue';
+import WalletTabBar from '@/components/WalletTabBar.vue';
 import { DEFAULT_NETWORK_LIST, DEFAULT_TOKENS, WALLET_INTERNAL_SERVICE_NAME, WALLET_SERVICE_NAME } from '@/lib/constants';
 import { callThisAppService, decodeJson, encodeJson } from '@/lib/json-rpc';
 import { shortAddress } from '@/lib/format';
@@ -14,7 +24,6 @@ import type {
   RevealAccountPrivateKeyResult,
   RevealRecoveryPhraseResult,
   SignMessageResult,
-  SignTransactionResult,
   TransactionHistoryEntry,
   TransactionStatus,
   TokenConfig,
@@ -111,7 +120,6 @@ const resetForm = reactive({
   confirmText: '',
 });
 const settingsForm = reactive<WalletSettings>({ ...defaultSettings });
-const passwordInput = ref<HTMLInputElement | null>(null);
 const passwordDialog = reactive({
   open: false,
   title: '',
@@ -246,6 +254,7 @@ const approvalRows = computed(() => {
 
   return rows.filter(([, value]) => !!value);
 });
+const approvalPayloadPreview = computed(() => approvalPayloadText(approvalDialog.payload));
 
 const vaultConfirmMismatch = computed(() => (
   !status.value.exists
@@ -299,7 +308,7 @@ function stableDetails(err: unknown): string {
 function approvalPayloadText(value: unknown, maxLength = 2000): string {
   let text: string;
   try {
-    text = JSON.stringify(value, null, 2);
+    text = JSON.stringify(value, null, 2) ?? '';
   } catch {
     text = String(value);
   }
@@ -374,10 +383,6 @@ function balanceKey(accountId: string, tokenId = 'native', networkKey = selected
   return `${networkKey}:${accountId}:${tokenId}`;
 }
 
-function balanceText(result: BalanceResult | undefined): string {
-  return result ? `${result.formatted} ${result.symbol}` : 'Loading';
-}
-
 async function requestWalletPassword(title: string, actionLabel: string): Promise<string | null> {
   if (passwordDialogResolve) {
     passwordDialogResolve(null);
@@ -386,8 +391,6 @@ async function requestWalletPassword(title: string, actionLabel: string): Promis
   passwordDialog.actionLabel = actionLabel;
   passwordDialog.passphrase = '';
   passwordDialog.open = true;
-  await nextTick();
-  passwordInput.value?.focus();
   return new Promise(resolve => {
     passwordDialogResolve = resolve;
   });
@@ -1126,44 +1129,12 @@ async function openExternalUrl(url: string | undefined): Promise<void> {
   });
 }
 
-function formatHistoryTimestamp(iso: string): string {
-  const time = Date.parse(iso);
-  if (Number.isNaN(time)) {
-    return iso;
-  }
-  return new Date(time).toLocaleString(undefined, {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  });
-}
-
 function historyStatus(entry: TransactionHistoryEntry): TransactionStatus {
   return entry.status ?? 'not_included';
 }
 
-function historyStatusLabel(entry: TransactionHistoryEntry): string {
-  switch (historyStatus(entry)) {
-    case 'pending':
-      return 'Pending';
-    case 'success':
-      return 'Included';
-    case 'failed':
-      return 'Failed';
-    case 'not_included':
-      return 'Not included';
-  }
-}
-
 function toggleHistoryEntry(entryId: string): void {
   expandedHistoryId.value = expandedHistoryId.value === entryId ? '' : entryId;
-}
-
-function historyValue(entry: TransactionHistoryEntry): string {
-  return entry.value ?? `${entry.amount} ${entry.assetSymbol}`;
-}
-
-function historyHash(entry: TransactionHistoryEntry): string {
-  return entry.txHash ?? entry.signature;
 }
 
 function setHistoryPage(nextPage: number): void {
@@ -1236,539 +1207,99 @@ onUnmounted(() => {
       tabindex="-1"
       readonly
     ></textarea>
-    <section v-if="!status.unlocked" class="vault-gate">
-      <article class="vault-dialog">
-        <img alt="Wallet" class="vault-logo" src="/logo.svg" />
-        <div class="vault-copy">
-          <h1>{{ status.exists ? 'Unlock Wallet' : 'Create Wallet Password' }}</h1>
-          <p>
-            {{ status.exists
-              ? 'Enter your wallet password.'
-              : 'Choose a wallet password to encrypt recovery phrases and private keys.' }}
-          </p>
-          <p v-if="approvalDialog.open" class="external-request-note">
-            External PrivacySafe app is waiting for wallet approval. Unlock the wallet to review the request.
-          </p>
-          <button
-            v-if="approvalDialog.open"
-            class="btn btn--secondary"
-            :disabled="busy"
-            @click="rejectExternalApproval"
-          >
-            Reject external request
-          </button>
-        </div>
-
-        <div class="form-stack">
-          <label>
-            <span>Wallet password</span>
-            <input
-              v-model="vaultForm.passphrase"
-              :autocomplete="status.exists ? 'current-password' : 'new-password'"
-              type="password"
-              :minlength="status.exists ? undefined : 4"
-              @keyup.enter="canSubmitVault && unlockOrCreateVault()"
-            />
-          </label>
-          <label v-if="!status.exists">
-            <span>Confirm password</span>
-            <input
-              v-model="vaultForm.confirmPassphrase"
-              autocomplete="new-password"
-              type="password"
-              minlength="4"
-              @keyup.enter="canSubmitVault && unlockOrCreateVault()"
-            />
-          </label>
-          <p v-if="vaultPasswordTooShort" class="field-error">Password must be at least 4 characters.</p>
-          <p v-if="vaultConfirmMismatch" class="field-error">Passwords do not match.</p>
-          <button class="btn btn--primary" :disabled="busy || !canSubmitVault" @click="unlockOrCreateVault">
-            {{ status.exists ? 'Unlock wallet' : 'Create wallet' }}
-          </button>
-        </div>
-
-        <ErrorNotice
-          v-if="errorMessage"
-          :message="errorMessage"
-          :details="errorDetails"
-          @close="clearError"
-        />
-      </article>
-    </section>
+    <VaultGate
+      v-if="!status.unlocked"
+      :status="status"
+      :vault-form="vaultForm"
+      :busy="busy"
+      :can-submit-vault="canSubmitVault"
+      :vault-password-too-short="vaultPasswordTooShort"
+      :vault-confirm-mismatch="vaultConfirmMismatch"
+      :approval-open="approvalDialog.open"
+      :error-message="errorMessage"
+      :error-details="errorDetails"
+      @submit="unlockOrCreateVault"
+      @reject-external="rejectExternalApproval"
+      @clear-error="clearError"
+    />
 
     <template v-else>
-      <header class="topbar">
-        <div class="brand">
-          <img alt="Wallet" class="brand__logo" src="/logo.svg" />
-          <h1>Wallet</h1>
-          <button class="lock-toggle" :disabled="busy" title="Lock wallet" aria-label="Lock wallet" @click="lock">
-            <svg class="lock-icon" aria-hidden="true" viewBox="0 0 24 24">
-              <rect x="5" y="10" width="14" height="10" rx="2" />
-              <path d="M8 10V7a4 4 0 0 1 7.5-2" />
-            </svg>
-          </button>
-        </div>
-      </header>
+      <WalletHeader :busy="busy" @lock="lock" />
+      <WalletTabBar v-model:active-tab="activeTab" />
 
-      <nav class="tabbar" aria-label="Wallet sections">
-        <button class="tab-btn" :data-active="activeTab === 'home'" aria-label="Account" @click="activeTab = 'home'">
-          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
-            <circle cx="12" cy="8" r="4" />
-            <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
-          </svg>
-          <span class="tab-label">Account</span>
-        </button>
-        <button class="tab-btn" :data-active="activeTab === 'create'" aria-label="Add account" @click="activeTab = 'create'">
-          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
-          </svg>
-          <span class="tab-label">Add</span>
-        </button>
-        <button class="tab-btn" :data-active="activeTab === 'history'" aria-label="History" @click="activeTab = 'history'">
-          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
-            <path d="M4 7v5h5" />
-            <path d="M5 12a7 7 0 1 0 2-5" />
-            <path d="M12 8v5l3 2" />
-          </svg>
-          <span class="tab-label">History</span>
-        </button>
-        <button class="tab-btn" :data-active="activeTab === 'settings'" aria-label="Settings" @click="activeTab = 'settings'">
-          <svg class="tab-icon" aria-hidden="true" viewBox="0 0 24 24">
-            <path d="M4 7h16" />
-            <path d="M4 17h16" />
-            <circle cx="9" cy="7" r="2" />
-            <circle cx="15" cy="17" r="2" />
-          </svg>
-          <span class="tab-label">Settings</span>
-        </button>
-      </nav>
+      <AddAccountTab
+        v-if="activeTab === 'create'"
+        v-model:selected-seed-group-id="selectedSeedGroupId"
+        :state="state"
+        :busy="busy"
+        :add-form="addForm"
+        :mnemonic-form="mnemonicForm"
+        :private-key-form="privateKeyForm"
+        :generated-mnemonic="generatedMnemonic"
+        @create="createNewWallet"
+        @import-mnemonic="importMnemonic"
+        @import-private-key="importPrivateKey"
+        @copy="copy"
+      />
 
-      <section v-if="activeTab === 'create'" class="tab-surface add-surface">
-        <div class="add-name-row">
-          <label class="add-name-field">
-            <span>Account name</span>
-            <input v-model.trim="addForm.accountName" autocomplete="off" />
-          </label>
-        </div>
-        <div class="add-sections">
-          <article class="add-section">
-            <div class="panel__header">
-              <h2>Generate New Account</h2>
-              <button class="btn btn--primary" :disabled="busy" @click="createNewWallet">
-                Create account
-              </button>
-            </div>
-            <select v-if="state.seedGroups.length" v-model="selectedSeedGroupId" aria-label="Base wallet">
-              <option value="">New wallet</option>
-              <option v-for="group in state.seedGroups" :key="group.id" :value="group.id">
-                New derived account from {{ group.name }} (index {{ group.nextAccountIndex }})
-              </option>
-            </select>
-            <div v-if="generatedMnemonic" class="recovery-box">
-              <span>Recovery phrase for the new wallet</span>
-              <code>{{ generatedMnemonic }}</code>
-              <button class="btn btn--secondary" :disabled="busy" @click="copy(generatedMnemonic)">
-                Copy phrase
-              </button>
-            </div>
-          </article>
+      <HomeTab
+        v-else-if="activeTab === 'home'"
+        v-model:selected-network-key="selectedNetworkKey"
+        v-model:selected-account-id="selectedAccountId"
+        v-model:selected-token-id="selectedTokenId"
+        :available-networks="availableNetworks"
+        :accounts-for-network="accountsForNetwork"
+        :selected-account="selectedAccount"
+        :native-balance="nativeBalance"
+        :tracked-token-rows="trackedTokenRows"
+        :balances-loading="balancesLoading"
+        :busy="busy"
+        :selected-asset-symbol="selectedAssetSymbol"
+        :selected-network="selectedNetwork"
+        :compatible-tokens="compatibleTokens"
+        :transfer-form="transferForm"
+        :sign-form="signForm"
+        :last-transfer="lastTransfer"
+        :last-signature="lastSignature"
+        :can-reveal-backup-phrase="canRevealBackupPhrase"
+        @copy="copy"
+        @refresh-selected-balances="refreshSelectedBalances"
+        @transfer="transfer"
+        @open-external-url="openExternalUrl"
+        @sign-message="signMessage"
+        @reveal-backup-phrase="revealBackupPhrase"
+        @reveal-private-key="revealPrivateKey"
+      />
 
-          <article class="add-section">
-            <div class="panel__header">
-              <h2>Import Recovery Phrase</h2>
-            </div>
-            <textarea
-              v-model.trim="mnemonicForm.mnemonic"
-              rows="3"
-              placeholder="BIP-39 mnemonic"
-              spellcheck="false"
-            />
-            <button
-              class="btn btn--primary"
-              :disabled="busy || !mnemonicForm.mnemonic"
-              @click="importMnemonic"
-            >
-              Import
-            </button>
-          </article>
+      <HistoryTab
+        v-else-if="activeTab === 'history'"
+        :history-for-selected-account="historyForSelectedAccount"
+        :paged-history="pagedHistory"
+        :history-page="historyPage"
+        :history-page-size="historyPageSize"
+        :history-page-size-options="historyPageSizeOptions"
+        :history-page-count="historyPageCount"
+        :expanded-history-id="expandedHistoryId"
+        :selected-account="selectedAccount"
+        @update:history-page-size="historyPageSize = $event"
+        @set-history-page="setHistoryPage"
+        @toggle="toggleHistoryEntry"
+        @copy="copy"
+        @open-external-url="openExternalUrl"
+      />
 
-          <article class="add-section">
-            <div class="panel__header">
-              <h2>Import Private Key</h2>
-            </div>
-            <select v-model="privateKeyForm.chain">
-              <option value="ethereum">Ethereum 32-byte private key</option>
-              <option value="solana">Solana 32-byte seed</option>
-            </select>
-            <textarea
-              v-model.trim="privateKeyForm.privateKey"
-              rows="3"
-              placeholder="Hex, base58, base64, or JSON byte array"
-              spellcheck="false"
-            />
-            <button
-              class="btn btn--primary"
-              :disabled="busy || !privateKeyForm.privateKey"
-              @click="importPrivateKey"
-            >
-              Import private key
-            </button>
-          </article>
-        </div>
-      </section>
-
-      <section v-else-if="activeTab === 'home'" class="tab-surface home-grid">
-        <div class="home-selectors">
-          <label aria-label="Network">
-            <select v-model="selectedNetworkKey">
-              <option v-for="network in availableNetworks" :key="network.key" :value="network.key">
-                {{ network.name }}
-              </option>
-            </select>
-          </label>
-          <label aria-label="Account">
-            <select v-model="selectedAccountId" :disabled="accountsForNetwork.length === 0">
-              <option v-if="accountsForNetwork.length === 0" value="">No account</option>
-              <option v-for="account in accountsForNetwork" :key="account.id" :value="account.id">
-                {{ account.name }} - {{ shortAddress(account.address) }}
-              </option>
-            </select>
-          </label>
-        </div>
-
-        <article class="panel account-overview">
-          <div class="panel__header">
-            <div>
-              <h2>{{ selectedAccount?.name || 'No account selected' }}</h2>
-              <p v-if="selectedAccount" class="address-line">
-                {{ selectedAccount.address }}
-              </p>
-              <p v-if="selectedAccount" class="account-balance">
-                {{ nativeBalance ? `${nativeBalance.formatted} ${nativeBalance.symbol}` : balancesLoading ? 'Loading balance' : 'Balance unavailable' }}
-              </p>
-              <p v-else class="empty">Create or import an account to start.</p>
-            </div>
-            <button
-              v-if="selectedAccount"
-              class="icon-action"
-              :disabled="busy"
-              title="Copy address"
-              aria-label="Copy address"
-              @click="copy(selectedAccount.address)"
-            >
-              <span aria-hidden="true">⧉</span>
-            </button>
-          </div>
-        </article>
-
-        <article class="panel token-balances-panel">
-          <div class="panel__header">
-            <h2>Tokens</h2>
-            <button
-              class="icon-action"
-              :disabled="balancesLoading || !selectedAccount"
-              title="Refresh balances"
-              aria-label="Refresh balances"
-              @click="refreshSelectedBalances"
-            >
-              <span aria-hidden="true">↻</span>
-            </button>
-          </div>
-          <div v-if="trackedTokenRows.length" class="token-balance-list">
-            <div v-for="row in trackedTokenRows" :key="row.token.id" class="token-balance-row">
-              <span class="token-mark">{{ row.token.symbol.slice(0, 3) }}</span>
-              <span class="token-meta">
-                <strong>{{ row.token.symbol }}</strong>
-                <small>{{ row.token.name }}</small>
-              </span>
-              <strong class="token-amount">{{ row.error ? 'Unavailable' : balanceText(row.balance) }}</strong>
-              <small v-if="row.error" class="token-error">{{ row.error }}</small>
-            </div>
-          </div>
-          <p v-else class="empty">No tracked tokens for this network.</p>
-        </article>
-
-        <div class="work-panels">
-          <article class="subpanel">
-            <h3>Transfer {{ selectedAssetSymbol }}</h3>
-            <label>
-              <span>Asset</span>
-              <select v-model="selectedTokenId" :disabled="!selectedAccount">
-                <option value="">{{ selectedNetwork?.nativeSymbol || 'Native coin' }}</option>
-                <option v-for="token in compatibleTokens" :key="token.id" :value="token.id">
-                  {{ token.symbol }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>Recipient</span>
-              <input v-model.trim="transferForm.to" autocomplete="off" />
-            </label>
-            <label>
-              <span>Amount</span>
-              <input v-model.trim="transferForm.amount" autocomplete="off" inputmode="decimal" />
-            </label>
-            <button
-              class="btn btn--primary"
-              :disabled="busy || !selectedAccount || !transferForm.to || !transferForm.amount"
-              @click="transfer"
-            >
-              Send
-            </button>
-            <button v-if="lastTransfer?.explorerUrl" class="link-button tx-link" @click="openExternalUrl(lastTransfer.explorerUrl)">
-              {{ shortAddress(lastTransfer.signature) }}
-            </button>
-          </article>
-
-          <article class="subpanel">
-            <h3>Sign Message</h3>
-            <textarea
-              v-model="signForm.message"
-              rows="6"
-              placeholder="Message content"
-              spellcheck="false"
-            />
-            <button
-              class="btn btn--primary"
-              :disabled="busy || !selectedAccount || !signForm.message"
-              @click="signMessage"
-            >
-              Sign
-            </button>
-            <pre v-if="lastSignature">{{ lastSignature }}</pre>
-          </article>
-        </div>
-
-        <article class="panel">
-          <div class="panel__header">
-            <h2>Backup</h2>
-            <div class="button-row">
-              <button
-                v-if="canRevealBackupPhrase"
-                class="btn btn--danger btn--muted-danger"
-                :disabled="busy || !selectedAccount"
-                @click="revealBackupPhrase"
-              >
-                Show backup phrase
-              </button>
-              <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="revealPrivateKey">
-                Show private key
-              </button>
-            </div>
-          </div>
-        </article>
-      </section>
-
-      <section v-else-if="activeTab === 'history'" class="tab-surface history-panel">
-        <div class="history-header">
-          <div class="history-controls" v-if="historyForSelectedAccount.length">
-            <label aria-label="Rows per page">
-              <select v-model.number="historyPageSize">
-                <option v-for="size in historyPageSizeOptions" :key="size" :value="size">
-                  {{ size }}
-                </option>
-              </select>
-            </label>
-            <div class="history-pages" aria-label="History pagination">
-              <button class="icon-action" :disabled="historyPage === 1" aria-label="Previous page" @click="setHistoryPage(historyPage - 1)">
-                ‹
-              </button>
-              <span>{{ historyPage }} / {{ historyPageCount }}</span>
-              <button class="icon-action" :disabled="historyPage === historyPageCount" aria-label="Next page" @click="setHistoryPage(historyPage + 1)">
-                ›
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-if="historyForSelectedAccount.length" class="history-list">
-          <article
-            v-for="entry in pagedHistory"
-            :key="entry.id"
-            class="history-row"
-            :data-expanded="expandedHistoryId === entry.id"
-            :data-status="historyStatus(entry)"
-          >
-            <button class="history-summary" type="button" @click="toggleHistoryEntry(entry.id)">
-              <span class="history-status">
-                <svg v-if="historyStatus(entry) === 'success'" aria-hidden="true" viewBox="0 0 24 24">
-                  <path d="m5 12 5 5L20 7" />
-                </svg>
-                <svg v-else-if="historyStatus(entry) === 'failed'" aria-hidden="true" viewBox="0 0 24 24">
-                  <path d="M6 6l12 12" />
-                  <path d="M18 6 6 18" />
-                </svg>
-                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="6" />
-                </svg>
-              </span>
-              <span class="history-time">{{ formatHistoryTimestamp(entry.createdAt) }}</span>
-              <span class="history-main">
-                <strong>{{ historyValue(entry) }}</strong>
-                <small>{{ shortAddress(entry.to) }}</small>
-              </span>
-              <code>{{ shortAddress(historyHash(entry)) }}</code>
-            </button>
-            <div v-if="expandedHistoryId === entry.id" class="history-details">
-              <dl>
-                <div>
-                  <dt>From</dt>
-                  <dd>
-                    <code>{{ entry.from ?? selectedAccount?.address ?? '' }}</code>
-                    <button class="icon-action" :disabled="!(entry.from ?? selectedAccount?.address)" title="Copy from" aria-label="Copy from" @click="copy(entry.from ?? selectedAccount?.address ?? '')">
-                      ⧉
-                    </button>
-                  </dd>
-                </div>
-                <div>
-                  <dt>To</dt>
-                  <dd>
-                    <code>{{ entry.to }}</code>
-                    <button class="icon-action" title="Copy to" aria-label="Copy to" @click="copy(entry.to)">
-                      ⧉
-                    </button>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Value</dt>
-                  <dd>
-                    <code>{{ historyValue(entry) }}</code>
-                    <button class="icon-action" title="Copy value" aria-label="Copy value" @click="copy(historyValue(entry))">
-                      ⧉
-                    </button>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Tx hash</dt>
-                  <dd>
-                    <code>{{ historyHash(entry) }}</code>
-                    <button class="icon-action" title="Copy transaction hash" aria-label="Copy transaction hash" @click="copy(historyHash(entry))">
-                      ⧉
-                    </button>
-                  </dd>
-                </div>
-              </dl>
-              <button v-if="entry.explorerUrl" class="btn btn--secondary explorer-button" @click="openExternalUrl(entry.explorerUrl)">
-                <svg aria-hidden="true" viewBox="0 0 24 24">
-                  <path d="M14 4h6v6" />
-                  <path d="M10 14 20 4" />
-                  <path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4" />
-                </svg>
-                <span>Open explorer</span>
-              </button>
-            </div>
-          </article>
-        </div>
-        <p v-else class="empty">No transactions recorded for the selected account.</p>
-      </section>
-
-      <section v-else class="tab-surface settings-grid">
-        <article class="panel">
-          <div class="panel__header">
-            <h2>Signing Rules</h2>
-          </div>
-          <label class="toggle-row">
-            <span>
-              <strong>Require password for transfers</strong>
-              <small>Applies to ETH, SOL, ERC-20, and SPL token transfers.</small>
-            </span>
-            <input
-              v-model="settingsForm.requirePasswordForTransfers"
-              :disabled="busy"
-              type="checkbox"
-              @change="updateSetting('requirePasswordForTransfers')"
-            />
-          </label>
-          <label class="toggle-row">
-            <span>
-              <strong>Require password for message signing</strong>
-              <small>Applies to direct signMessage requests.</small>
-            </span>
-            <input
-              v-model="settingsForm.requirePasswordForMessageSigning"
-              :disabled="busy"
-              type="checkbox"
-              @change="updateSetting('requirePasswordForMessageSigning')"
-            />
-          </label>
-          <label class="toggle-row">
-            <span>
-              <strong>Require password for transaction signing</strong>
-              <small>Applies to raw transaction signing from other PrivacySafe apps.</small>
-            </span>
-            <input
-              v-model="settingsForm.requirePasswordForTransactionSigning"
-              :disabled="busy"
-              type="checkbox"
-              @change="updateSetting('requirePasswordForTransactionSigning')"
-            />
-          </label>
-          <label class="toggle-row">
-            <span>
-              <strong>Development networks</strong>
-              <small>Shows Ethereum and Solana Testnets in the network selector.</small>
-            </span>
-            <input
-              v-model="settingsForm.enableDevelopmentNetworks"
-              :disabled="busy"
-              type="checkbox"
-              @change="updateSetting('enableDevelopmentNetworks')"
-            />
-          </label>
-        </article>
-
-        <article class="panel">
-          <div class="panel__header">
-            <h2>Change Password</h2>
-          </div>
-          <label>
-            <span>Current password</span>
-            <input v-model="passwordForm.currentPassphrase" autocomplete="current-password" type="password" />
-          </label>
-          <label>
-            <span>New password</span>
-            <input v-model="passwordForm.newPassphrase" autocomplete="new-password" type="password" minlength="4" />
-          </label>
-          <label>
-            <span>Confirm new password</span>
-            <input v-model="passwordForm.confirmPassphrase" autocomplete="new-password" type="password" minlength="4" />
-          </label>
-          <p v-if="newPasswordTooShort" class="field-error">New password must be at least 4 characters.</p>
-          <p v-if="passwordConfirmMismatch" class="field-error">Passwords do not match.</p>
-          <button
-            class="btn btn--primary"
-            :disabled="busy || !passwordForm.currentPassphrase || !passwordForm.newPassphrase || newPasswordTooShort || passwordConfirmMismatch"
-            @click="changePassphrase"
-          >
-            Change password
-          </button>
-        </article>
-
-        <article class="panel danger-panel">
-          <div class="panel__header">
-            <h2>Reset Wallet</h2>
-          </div>
-          <label>
-            <p>Removes all accounts and data.</p>
-            <span class="delete-warning">Permanent action. Data cannot be recovered.</span>
-          </label>
-          <label>
-            <span>Wallet password</span>
-            <input v-model="resetForm.passphrase" autocomplete="current-password" type="password" />
-          </label>
-          <label>
-            <span>Type DELETE</span>
-            <input v-model.trim="resetForm.confirmText" autocomplete="off" />
-          </label>
-          <button
-            class="btn btn--danger"
-            :disabled="busy || !resetForm.passphrase || resetForm.confirmText !== 'DELETE'"
-            @click="resetVault"
-          >
-            Delete vault
-          </button>
-        </article>
-      </section>
+      <SettingsTab
+        v-else
+        :busy="busy"
+        :settings-form="settingsForm"
+        :password-form="passwordForm"
+        :reset-form="resetForm"
+        :new-password-too-short="newPasswordTooShort"
+        :password-confirm-mismatch="passwordConfirmMismatch"
+        @update-setting="updateSetting"
+        @change-passphrase="changePassphrase"
+        @reset-vault="resetVault"
+      />
 
       <ErrorNotice
         v-if="errorMessage"
@@ -1777,109 +1308,38 @@ onUnmounted(() => {
         @close="clearError"
       />
 
-      <div v-if="approvalDialog.open && status.unlocked" class="modal-backdrop" @click.self="rejectExternalApproval">
-        <section class="password-modal approval-modal" role="dialog" aria-modal="true" :aria-labelledby="'approval-dialog-title'">
-          <div class="panel__header">
-            <div>
-              <h2 id="approval-dialog-title">{{ approvalDialog.title }}</h2>
-              <p class="approval-subtitle">External PrivacySafe app is requesting wallet access.</p>
-            </div>
-            <button
-              class="error-notice__close"
-              :disabled="busy"
-              title="Reject"
-              aria-label="Reject"
-              @click="rejectExternalApproval"
-            >
-              ×
-            </button>
-          </div>
-          <dl class="approval-details">
-            <div v-for="row in approvalRows" :key="row[0]">
-              <dt>{{ row[0] }}</dt>
-              <dd>{{ row[1] }}</dd>
-            </div>
-          </dl>
-          <details class="approval-raw">
-            <summary>Request details</summary>
-            <pre>{{ approvalPayloadText(approvalDialog.payload) }}</pre>
-          </details>
-          <div class="modal-actions">
-            <button class="btn btn--secondary" :disabled="busy" @click="rejectExternalApproval">
-              Reject
-            </button>
-            <button class="btn btn--primary" :disabled="busy" @click="approveExternalApproval">
-              {{ approvalDialog.actionLabel }}
-            </button>
-          </div>
-        </section>
-      </div>
+      <ApprovalDialog
+        :open="approvalDialog.open && status.unlocked"
+        :busy="busy"
+        :title="approvalDialog.title"
+        :action-label="approvalDialog.actionLabel"
+        :rows="approvalRows"
+        :payload-text="approvalPayloadPreview"
+        @reject="rejectExternalApproval"
+        @approve="approveExternalApproval"
+      />
 
-      <div v-if="passwordDialog.open" class="modal-backdrop" @click.self="closePasswordDialog">
-        <section class="password-modal" role="dialog" aria-modal="true" :aria-labelledby="'password-dialog-title'">
-          <div class="panel__header">
-            <h2 id="password-dialog-title">{{ passwordDialog.title }}</h2>
-            <button
-              class="error-notice__close"
-              :disabled="busy"
-              title="Close"
-              aria-label="Close"
-              @click="closePasswordDialog"
-            >
-              ×
-            </button>
-          </div>
-          <label>
-            <span>Wallet password</span>
-            <input
-              ref="passwordInput"
-              v-model="passwordDialog.passphrase"
-              autocomplete="current-password"
-              type="password"
-              @keyup.enter="submitPasswordDialog"
-              @keyup.esc="closePasswordDialog"
-            />
-          </label>
-          <div class="modal-actions">
-            <button class="btn btn--secondary" :disabled="busy" @click="closePasswordDialog">
-              Cancel
-            </button>
-            <button class="btn btn--primary" :disabled="busy || !passwordDialog.passphrase" @click="submitPasswordDialog">
-              {{ passwordDialog.actionLabel }}
-            </button>
-          </div>
-        </section>
-      </div>
+      <PasswordDialog
+        v-model:passphrase="passwordDialog.passphrase"
+        :open="passwordDialog.open"
+        :busy="busy"
+        :title="passwordDialog.title"
+        :action-label="passwordDialog.actionLabel"
+        @close="closePasswordDialog"
+        @submit="submitPasswordDialog"
+      />
 
-      <div v-if="backupDialog.open" class="modal-backdrop" @click.self="closeBackupDialog">
-        <section class="password-modal backup-modal" role="dialog" aria-modal="true" :aria-labelledby="'backup-dialog-title'">
-          <div class="panel__header">
-            <h2 id="backup-dialog-title">{{ backupDialog.title }}</h2>
-            <button
-              class="error-notice__close"
-              :disabled="busy"
-              title="Close"
-              aria-label="Close"
-              @click="closeBackupDialog"
-            >
-              ×
-            </button>
-          </div>
-          <div class="recovery-box">
-            <span>{{ backupDialog.label }}</span>
-            <code>{{ backupDialog.value }}</code>
-            <small v-if="backupDialog.path">{{ backupDialog.path }}</small>
-          </div>
-          <div class="modal-actions">
-            <button class="btn btn--secondary" :disabled="busy" @click="copy(backupDialog.value)">
-              {{ backupDialog.copyLabel }}
-            </button>
-            <button class="btn btn--primary" :disabled="busy" @click="closeBackupDialog">
-              Close
-            </button>
-          </div>
-        </section>
-      </div>
+      <BackupDialog
+        :open="backupDialog.open"
+        :busy="busy"
+        :title="backupDialog.title"
+        :label="backupDialog.label"
+        :value="backupDialog.value"
+        :path="backupDialog.path"
+        :copy-label="backupDialog.copyLabel"
+        @close="closeBackupDialog"
+        @copy="copy"
+      />
     </template>
   </main>
 </template>
