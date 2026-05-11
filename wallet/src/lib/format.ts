@@ -37,6 +37,11 @@ export function normalizeHex(value: string): string {
   return trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`;
 }
 
+// Solana wallets export key material in different common shapes:
+// JSON byte array: common from Solana CLI keypair files, e.g. [12,34,...]
+// hex / 0x hex: common developer format and what we currently show when revealing the Solana 32-byte seed
+// base58: common Solana ecosystem encoding
+// base64: common transport/storage encoding
 export function parseSecretBytes(value: string): Uint8Array {
   const trimmed = value.trim();
   if (!trimmed) {
