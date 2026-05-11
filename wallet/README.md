@@ -23,6 +23,7 @@ Use:
 ```bash
 npm ci --ignore-scripts
 npm run build
+npm run test
 ```
 
 ## Seed-Backed Wallets
