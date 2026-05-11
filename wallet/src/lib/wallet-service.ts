@@ -266,22 +266,6 @@ function parseUnits(value: string, decimals: number): bigint {
   return ethers.parseUnits(value, decimals);
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<undefined>(resolve => {
-        timeout = setTimeout(() => resolve(undefined), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 function ethereumExplorer(txHash: string): string {
   return `https://etherscan.io/tx/${txHash}`;
 }
@@ -346,6 +330,11 @@ type SolanaSignatureStatusesResult = {
     confirmationStatus?: string | null;
   } | null>;
 };
+
+type EthereumTransactionReceiptResult = {
+  blockNumber?: string;
+  status?: string;
+} | null;
 
 export class WalletService {
   private vault?: VaultPlain;
@@ -634,7 +623,7 @@ export class WalletService {
         ? this.transferEthereumToken(account, network, token, request)
         : this.transferSolanaToken(account, network, token, request));
       await this.tryRecordTransaction(account, network, request, result, token.symbol);
-      this.refreshSolanaHistoryStatus(account, network, result);
+      this.refreshTransactionHistoryStatus(account, network, result);
       return result;
     }
 
@@ -642,7 +631,7 @@ export class WalletService {
       ? this.transferEthereumNative(account, network, request)
       : this.transferSolanaNative(account, network, request));
     await this.tryRecordTransaction(account, network, request, result, network.nativeSymbol);
-    this.refreshSolanaHistoryStatus(account, network, result);
+    this.refreshTransactionHistoryStatus(account, network, result);
     return result;
   }
 
@@ -823,17 +812,19 @@ export class WalletService {
     }
   }
 
-  private refreshSolanaHistoryStatus(
+  private refreshTransactionHistoryStatus(
     account: WalletAccount,
     network: NetworkConfig,
     result: TransferResult,
   ): void {
-    if (account.chain !== 'solana' || result.status !== 'pending') {
+    if (result.status !== 'pending') {
       return;
     }
 
     void (async () => {
-      const confirmation = await this.waitForSolanaConfirmation(network, result.signature);
+      const confirmation = account.chain === 'ethereum'
+        ? await this.waitForEthereumConfirmation(network, result.signature)
+        : await this.waitForSolanaConfirmation(network, result.signature);
       if (!this.vault || confirmation.status === 'pending') {
         return;
       }
@@ -847,9 +838,10 @@ export class WalletService {
       }
       entry.status = confirmation.status;
       entry.confirmedAt = confirmation.confirmedAt;
+      entry.blockNumber = confirmation.blockNumber ?? entry.blockNumber;
       await this.persist();
     })().catch(err => {
-      void w3n.log?.('error', `Wallet failed to refresh Solana transaction status ${result.signature}`, err);
+      void w3n.log?.('error', `Wallet failed to refresh transaction status ${result.signature}`, err);
     });
   }
 
@@ -1064,16 +1056,11 @@ export class WalletService {
       to: request.to,
       value: parseUnits(request.amount, 18),
     });
-    const receipt = await this.waitForEthereumReceipt(tx);
     return {
       accountId: account.id,
       chain: account.chain,
       signature: tx.hash,
-      status: receipt
-        ? receipt.status === 1 ? 'success' : 'failed'
-        : 'not_included',
-      blockNumber: receipt?.blockNumber,
-      confirmedAt: receipt ? nowIso() : undefined,
+      status: 'pending',
       explorerUrl: ethereumExplorerFor(network, tx.hash),
     };
   }
@@ -1089,16 +1076,11 @@ export class WalletService {
     const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
     const contract = new ethers.Contract(token.address, ERC20_ABI, wallet);
     const tx = await contract.transfer(request.to, parseUnits(request.amount, token.decimals));
-    const receipt = await this.waitForEthereumReceipt(tx);
     return {
       accountId: account.id,
       chain: account.chain,
       signature: tx.hash,
-      status: receipt
-        ? receipt.status === 1 ? 'success' : 'failed'
-        : 'not_included',
-      blockNumber: receipt?.blockNumber,
-      confirmedAt: receipt ? nowIso() : undefined,
+      status: 'pending',
       explorerUrl: ethereumExplorerFor(network, tx.hash),
     };
   }
@@ -1162,18 +1144,32 @@ export class WalletService {
     };
   }
 
-  private async waitForEthereumReceipt(
-    tx: ethers.TransactionResponse,
-  ): Promise<ethers.TransactionReceipt | undefined> {
+  private async waitForEthereumConfirmation(
+    network: NetworkConfig,
+    txHash: string,
+  ): Promise<{ status: TransferResult['status']; confirmedAt?: string; blockNumber?: number }> {
+    const startedAt = Date.now();
+    let seenPending = false;
     try {
-      return await withTimeout(tx.wait(1), TX_CONFIRM_TIMEOUT_MS) ?? undefined;
-    } catch (err) {
-      const receipt = (err as { receipt?: ethers.TransactionReceipt }).receipt;
-      if (receipt) {
-        return receipt;
+      while (Date.now() - startedAt < TX_CONFIRM_TIMEOUT_MS) {
+        const receipt = await this.withRpcFallback('ethereum', this.rpcUrls(network), async rpcUrl => (
+          this.jsonRpc<EthereumTransactionReceiptResult>(rpcUrl, 'eth_getTransactionReceipt', [txHash])
+        ));
+        if (receipt) {
+          const blockNumber = receipt.blockNumber ? Number.parseInt(receipt.blockNumber, 16) : undefined;
+          return {
+            status: receipt.status === '0x1' ? 'success' : 'failed',
+            confirmedAt: nowIso(),
+            blockNumber,
+          };
+        }
+        seenPending = true;
+        await new Promise(resolve => setTimeout(resolve, 1500));
       }
-      throw err;
+    } catch (err) {
+      await w3n.log?.('error', `Wallet could not confirm Ethereum transaction ${txHash}`, err);
     }
+    return { status: seenPending ? 'pending' : 'not_included' };
   }
 
   private async solanaAccountExists(network: NetworkConfig, publicKey: PublicKey): Promise<boolean> {
@@ -1213,7 +1209,7 @@ export class WalletService {
   private async waitForSolanaConfirmation(
     network: NetworkConfig,
     signature: string,
-  ): Promise<{ status: TransferResult['status']; confirmedAt?: string }> {
+  ): Promise<{ status: TransferResult['status']; confirmedAt?: string; blockNumber?: number }> {
     const startedAt = Date.now();
     let seenPending = false;
     try {

@@ -109,6 +109,7 @@ const backupDialog = reactive({
 });
 let passwordDialogResolve: ((value: string | null) => void) | undefined;
 let balanceRefreshTimer: number | undefined;
+let transferStatusRefreshTimer: number | undefined;
 let balanceRefreshSeq = 0;
 let balanceRefreshQueued = false;
 
@@ -619,8 +620,42 @@ async function transfer(): Promise<void> {
     lastTransfer.value = result;
     await refresh();
     await refreshSelectedBalances();
+    if (result.status === 'pending') {
+      pollPendingTransfer(result.accountId, result.signature);
+    }
     setResult(`Transfer submitted: ${result.signature}`);
   });
+}
+
+function stopPendingTransferPoll(): void {
+  if (transferStatusRefreshTimer !== undefined) {
+    window.clearTimeout(transferStatusRefreshTimer);
+    transferStatusRefreshTimer = undefined;
+  }
+}
+
+function pollPendingTransfer(accountId: string, signature: string): void {
+  stopPendingTransferPoll();
+  const startedAt = Date.now();
+  const tick = async () => {
+    try {
+      await refresh();
+      const entry = (state.value.history ?? []).find(item => (
+        item.accountId === accountId && item.signature === signature
+      ));
+      if (!entry || historyStatus(entry) !== 'pending' || Date.now() - startedAt > 130000) {
+        await refreshSelectedBalances();
+        stopPendingTransferPoll();
+        return;
+      }
+    } catch (err) {
+      setError(err);
+      stopPendingTransferPoll();
+      return;
+    }
+    transferStatusRefreshTimer = window.setTimeout(tick, 2000);
+  };
+  transferStatusRefreshTimer = window.setTimeout(tick, 2000);
 }
 
 async function signMessage(): Promise<void> {
@@ -870,6 +905,7 @@ onUnmounted(() => {
   if (balanceRefreshTimer !== undefined) {
     window.clearInterval(balanceRefreshTimer);
   }
+  stopPendingTransferPoll();
 });
 </script>
 
