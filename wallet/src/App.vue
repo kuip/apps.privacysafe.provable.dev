@@ -8,7 +8,9 @@ import { openJsonStore } from '@/lib/storage';
 import type {
   BalanceResult,
   Chain,
+  CreateAccountResult,
   NetworkConfig,
+  RevealAccountPrivateKeyResult,
   RevealRecoveryPhraseResult,
   SignMessageResult,
   TransactionHistoryEntry,
@@ -35,6 +37,7 @@ const status = ref<WalletStatus>({
 const state = ref<WalletPublicState>({
   version: 1,
   accounts: [],
+  seedGroups: [],
   networks: [],
   tokens: [],
   history: [],
@@ -54,6 +57,7 @@ const balancesLoading = ref(false);
 const lastTransfer = ref<TransferResult | null>(null);
 const lastSignature = ref('');
 const selectedNetworkKey = ref('');
+const selectedSeedGroupId = ref('');
 const expandedHistoryId = ref('');
 const historyPage = ref(1);
 const historyPageSize = ref(10);
@@ -201,9 +205,7 @@ const newPasswordTooShort = computed(() => (
 ));
 const transferNeedsPassword = computed(() => state.value.settings.requirePasswordForTransfers);
 const signMessageNeedsPassword = computed(() => state.value.settings.requirePasswordForMessageSigning);
-const backupButtonLabel = computed(() => (
-  selectedAccount.value?.secretKind === 'private-key' ? 'Show private key' : 'Show backup phrase'
-));
+const canRevealBackupPhrase = computed(() => selectedAccount.value?.secretKind === 'mnemonic');
 
 function setResult(_text: string): void {
   errorMessage.value = '';
@@ -362,6 +364,7 @@ function normalizePublicState(value: WalletPublicState | undefined): WalletPubli
   return {
     version: 1,
     accounts: value?.accounts ?? [],
+    seedGroups: value?.seedGroups ?? [],
     networks: Array.from(networksByKey.values()),
     tokens: Array.from(tokensById.values()) as TokenConfig[],
     history: value?.history ?? [],
@@ -382,6 +385,9 @@ function selectDefaultNetworkAndAccount(): void {
   }
   if (!accountsForNetwork.value.some(account => account.id === selectedAccountId.value)) {
     selectedAccountId.value = accountsForNetwork.value[0]?.id ?? '';
+  }
+  if (selectedSeedGroupId.value && !state.value.seedGroups.some(group => group.id === selectedSeedGroupId.value)) {
+    selectedSeedGroupId.value = '';
   }
 }
 
@@ -491,18 +497,22 @@ async function updateSetting(key: keyof WalletSettings): Promise<void> {
 
 async function createNewWallet(): Promise<void> {
   await run(async () => {
-    const result = await serviceCall<void, { mnemonic: string }>('createMnemonic', undefined as void);
-    generatedMnemonic.value = result.mnemonic;
-    state.value = await serviceCall('importMnemonic', {
-      mnemonic: result.mnemonic,
+    const result = await serviceCall<
+      { seedGroupId?: string; chains: Chain[]; name?: string },
+      CreateAccountResult
+    >('createAccount', {
+      seedGroupId: selectedSeedGroupId.value || undefined,
       chains: ['ethereum', 'solana'] satisfies Chain[],
       name: addForm.accountName || undefined,
     });
+    generatedMnemonic.value = result.mnemonic ?? '';
+    state.value = result.state;
+    selectedSeedGroupId.value = result.seedGroupId;
     mnemonicForm.mnemonic = '';
     await refresh();
     await refreshSelectedBalances();
     activeTab.value = 'home';
-    setResult('New wallet created.');
+    setResult('New account created.');
   });
 }
 
@@ -512,7 +522,9 @@ async function importMnemonic(): Promise<void> {
       mnemonic: mnemonicForm.mnemonic,
       chains: ['ethereum', 'solana'] satisfies Chain[],
       name: addForm.accountName || undefined,
+      walletName: addForm.accountName || undefined,
     });
+    generatedMnemonic.value = '';
     await refresh();
     await refreshSelectedBalances();
     activeTab.value = 'home';
@@ -684,14 +696,13 @@ async function signMessage(): Promise<void> {
   });
 }
 
-async function revealBackupSecret(): Promise<void> {
+async function revealBackupPhrase(): Promise<void> {
   if (!selectedAccountId.value) {
     return;
   }
-  const isPrivateKeyAccount = selectedAccount.value?.secretKind === 'private-key';
   const passphrase = await requestWalletPassword(
-    isPrivateKeyAccount ? 'Show Private Key' : 'Show Backup Phrase',
-    isPrivateKeyAccount ? 'Show key' : 'Show phrase'
+    'Show Backup Phrase',
+    'Show phrase'
   );
   if (!passphrase) {
     return;
@@ -704,11 +715,37 @@ async function revealBackupSecret(): Promise<void> {
       accountId: selectedAccountId.value,
       passphrase,
     });
-    backupDialog.title = result.secretKind === 'private-key' ? 'Private Key' : 'Backup Phrase';
-    backupDialog.label = result.secretKind === 'private-key' ? 'Private key' : 'Recovery phrase';
-    backupDialog.value = result.secretKind === 'private-key' ? result.privateKey ?? '' : result.mnemonic ?? '';
+    backupDialog.title = 'Backup Phrase';
+    backupDialog.label = 'Recovery phrase';
+    backupDialog.value = result.mnemonic ?? '';
     backupDialog.path = result.derivationPath ?? '';
-    backupDialog.copyLabel = result.secretKind === 'private-key' ? 'Copy key' : 'Copy phrase';
+    backupDialog.copyLabel = 'Copy phrase';
+    backupDialog.open = true;
+    setResult('');
+  });
+}
+
+async function revealPrivateKey(): Promise<void> {
+  if (!selectedAccountId.value) {
+    return;
+  }
+  const passphrase = await requestWalletPassword('Show Private Key', 'Show key');
+  if (!passphrase) {
+    return;
+  }
+  await run(async () => {
+    const result = await serviceCall<
+      { accountId: string; passphrase: string },
+      RevealAccountPrivateKeyResult
+    >('revealAccountPrivateKey', {
+      accountId: selectedAccountId.value,
+      passphrase,
+    });
+    backupDialog.title = 'Private Key';
+    backupDialog.label = result.chain === 'ethereum' ? 'Ethereum private key' : 'Solana 32-byte seed';
+    backupDialog.value = result.privateKey;
+    backupDialog.path = '';
+    backupDialog.copyLabel = 'Copy key';
     backupDialog.open = true;
     setResult('');
   });
@@ -749,6 +786,7 @@ async function resetVault(): Promise<void> {
     });
     state.value = normalizePublicState(undefined);
     selectedNetworkKey.value = '';
+    selectedSeedGroupId.value = '';
     selectedAccountId.value = '';
     selectedTokenId.value = '';
     balanceByKey.value = {};
@@ -1028,11 +1066,17 @@ onUnmounted(() => {
             <div class="panel__header">
               <h2>Generate New Account</h2>
               <button class="btn btn--primary" :disabled="busy" @click="createNewWallet">
-                Generate
+                Create account
               </button>
             </div>
+            <select v-if="state.seedGroups.length" v-model="selectedSeedGroupId" aria-label="Base wallet">
+              <option value="">New wallet</option>
+              <option v-for="group in state.seedGroups" :key="group.id" :value="group.id">
+                New derived account from {{ group.name }} (index {{ group.nextAccountIndex }})
+              </option>
+            </select>
             <div v-if="generatedMnemonic" class="recovery-box">
-              <span>Recovery phrase for the wallet just created</span>
+              <span>Recovery phrase for the new wallet</span>
               <code>{{ generatedMnemonic }}</code>
               <button class="btn btn--secondary" :disabled="busy" @click="copy(generatedMnemonic)">
                 Copy phrase
@@ -1209,9 +1253,19 @@ onUnmounted(() => {
         <article class="panel">
           <div class="panel__header">
             <h2>Backup</h2>
-            <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="revealBackupSecret">
-              {{ backupButtonLabel }}
-            </button>
+            <div class="button-row">
+              <button
+                v-if="canRevealBackupPhrase"
+                class="btn btn--danger btn--muted-danger"
+                :disabled="busy || !selectedAccount"
+                @click="revealBackupPhrase"
+              >
+                Show backup phrase
+              </button>
+              <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="revealPrivateKey">
+                Show private key
+              </button>
+            </div>
           </div>
         </article>
       </section>

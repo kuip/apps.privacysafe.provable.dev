@@ -205,6 +205,13 @@ small {
   gap: var(--spacing-m, 16px);
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-s, 8px);
+}
+
 .panel-divider {
   height: 1px;
   margin: var(--spacing-s, 8px) 0;

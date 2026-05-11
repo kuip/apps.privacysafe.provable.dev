@@ -29,14 +29,25 @@ export interface WalletAccount {
   name: string;
   address: string;
   networkKey?: string;
+  seedGroupId?: string;
+  accountIndex?: number;
   derivationPath?: string;
   secretKind: SecretKind;
   createdAt: string;
 }
 
+export interface WalletSeedGroup {
+  id: string;
+  name: string;
+  nextAccountIndex: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WalletPublicState {
   version: 1;
   accounts: WalletAccount[];
+  seedGroups: WalletSeedGroup[];
   networks: NetworkConfig[];
   tokens: TokenConfig[];
   history: TransactionHistoryEntry[];
@@ -54,14 +65,20 @@ export interface WalletSettings {
 export interface AccountSecret {
   chain: Chain;
   kind: SecretKind;
-  mnemonic?: string;
+  seedGroupId?: string;
+  accountIndex?: number;
   privateKey?: string;
   derivationPath?: string;
+}
+
+export interface SeedGroupSecret extends WalletSeedGroup {
+  mnemonic: string;
 }
 
 export interface VaultPlain {
   version: 1;
   accounts: WalletAccount[];
+  seedGroups: Record<string, SeedGroupSecret>;
   secrets: Record<string, AccountSecret>;
   history: TransactionHistoryEntry[];
   settings: WalletSettings;
@@ -82,6 +99,21 @@ export interface ImportMnemonicRequest {
   chains: Chain[];
   accountIndex?: number;
   name?: string;
+  walletName?: string;
+}
+
+export interface CreateAccountRequest {
+  seedGroupId?: string;
+  chains?: Chain[];
+  name?: string;
+  walletName?: string;
+}
+
+export interface CreateAccountResult {
+  state: WalletPublicState;
+  seedGroupId: string;
+  accountIndex: number;
+  mnemonic?: string;
 }
 
 export interface ImportPrivateKeyRequest {
@@ -111,10 +143,19 @@ export interface RevealRecoveryPhraseRequest {
 
 export interface RevealRecoveryPhraseResult {
   accountId: string;
-  secretKind: SecretKind;
-  mnemonic?: string;
-  privateKey?: string;
+  mnemonic: string;
   derivationPath?: string;
+}
+
+export interface RevealAccountPrivateKeyRequest {
+  accountId: string;
+  passphrase: string;
+}
+
+export interface RevealAccountPrivateKeyResult {
+  accountId: string;
+  chain: Chain;
+  privateKey: string;
 }
 
 export interface BalanceRequest {

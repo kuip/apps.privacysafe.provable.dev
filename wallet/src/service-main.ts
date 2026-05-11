@@ -4,9 +4,11 @@ import { WalletService } from '@/lib/wallet-service';
 import type {
   BalanceRequest,
   ChangePassphraseRequest,
+  CreateAccountRequest,
   ImportMnemonicRequest,
   ImportPrivateKeyRequest,
   ResetVaultRequest,
+  RevealAccountPrivateKeyRequest,
   RevealRecoveryPhraseRequest,
   SignMessageRequest,
   SignTransactionRequest,
@@ -27,7 +29,7 @@ type IncomingConnection = web3n.rpc.Connection;
 const service = new WalletService();
 const internalMethods = new Set([
   'status',
-  'createMnemonic',
+  'createAccount',
   'unlock',
   'lock',
   'getPublicState',
@@ -36,6 +38,7 @@ const internalMethods = new Set([
   'changePassphrase',
   'resetVault',
   'revealRecoveryPhrase',
+  'revealAccountPrivateKey',
   'importMnemonic',
   'importPrivateKey',
   'getBalance',
@@ -87,8 +90,8 @@ async function callMethod(method: string, data: web3n.rpc.PassedDatum | undefine
   switch (method) {
     case 'status':
       return service.status();
-    case 'createMnemonic':
-      return service.createMnemonic();
+    case 'createAccount':
+      return service.createAccount(decodeJson<CreateAccountRequest>(data));
     case 'unlock':
       return service.unlock(decodeJson<UnlockRequest>(data));
     case 'lock':
@@ -105,6 +108,8 @@ async function callMethod(method: string, data: web3n.rpc.PassedDatum | undefine
       return service.resetVault(decodeJson<ResetVaultRequest>(data));
     case 'revealRecoveryPhrase':
       return service.revealRecoveryPhrase(decodeJson<RevealRecoveryPhraseRequest>(data));
+    case 'revealAccountPrivateKey':
+      return service.revealAccountPrivateKey(decodeJson<RevealAccountPrivateKeyRequest>(data));
     case 'importMnemonic':
       return service.importMnemonic(decodeJson<ImportMnemonicRequest>(data));
     case 'importPrivateKey':

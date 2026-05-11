@@ -35,12 +35,17 @@ import type {
   BalanceResult,
   ChangePassphraseRequest,
   Chain,
+  CreateAccountRequest,
+  CreateAccountResult,
   ImportMnemonicRequest,
   ImportPrivateKeyRequest,
   NetworkConfig,
   ResetVaultRequest,
+  RevealAccountPrivateKeyRequest,
+  RevealAccountPrivateKeyResult,
   RevealRecoveryPhraseRequest,
   RevealRecoveryPhraseResult,
+  SeedGroupSecret,
   SignMessageRequest,
   SignMessageResult,
   SignTransactionRequest,
@@ -53,6 +58,7 @@ import type {
   VaultPlain,
   WalletAccount,
   WalletPublicState,
+  WalletSeedGroup,
   WalletSettings,
   WalletStatus,
 } from '@/lib/types';
@@ -73,6 +79,10 @@ type WalletVaultFile = {
     data: string;
   };
   updatedAt: string;
+};
+
+type ResolvedAccountSecret = AccountSecret & {
+  mnemonic?: string;
 };
 
 const SCRYPT_PARAMS = { n: 2 ** 15, r: 8, p: 1, dkLen: 32 } as const;
@@ -100,10 +110,20 @@ function accountId(chain: Chain, address: string): string {
   return `${chain}:${address}`;
 }
 
+function newSeedGroupId(): string {
+  return `seed:${bytesToBase64(randomBytes(12)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}`;
+}
+
+function publicSeedGroup(group: SeedGroupSecret): WalletSeedGroup {
+  const { mnemonic: _mnemonic, ...publicGroup } = group;
+  return publicGroup;
+}
+
 function publicStateFromVault(vault: VaultPlain): WalletPublicState {
   return {
     version: 1,
     accounts: vault.accounts,
+    seedGroups: Object.values(vault.seedGroups ?? {}).map(publicSeedGroup),
     networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
     tokens: [...DEFAULT_TOKENS] as TokenConfig[],
     history: vault.history ?? [],
@@ -136,6 +156,7 @@ function normalizePublicState(state: WalletPublicState | undefined): WalletPubli
   ]);
   return {
     ...state,
+    seedGroups: state.seedGroups ?? [],
     networks: Array.from(networksByKey.values()) as NetworkConfig[],
     tokens: Array.from(tokensById.values()) as TokenConfig[],
     history: state.history ?? [],
@@ -146,9 +167,16 @@ function normalizePublicState(state: WalletPublicState | undefined): WalletPubli
   };
 }
 
+function derivationPath(chain: Chain, accountIndex: number): string {
+  return chain === 'ethereum'
+    ? `m/44'/60'/0'/0/${accountIndex}`
+    : `m/44'/501'/${accountIndex}'/0'`;
+}
+
 function normalizeVault(vault: VaultPlain): VaultPlain {
   return {
     ...vault,
+    seedGroups: vault.seedGroups ?? {},
     history: vault.history ?? [],
     settings: {
       ...DEFAULT_SETTINGS,
@@ -212,6 +240,7 @@ function makeEmptyVault(): VaultPlain {
   return {
     version: 1,
     accounts: [],
+    seedGroups: {},
     secrets: {},
     history: [],
     settings: { ...DEFAULT_SETTINGS },
@@ -226,7 +255,7 @@ function assertUnlocked(vault: VaultPlain | undefined): asserts vault is VaultPl
   }
 }
 
-function ethereumWalletFromSecret(secret: AccountSecret): ethers.Wallet | ethers.HDNodeWallet {
+function ethereumWalletFromSecret(secret: ResolvedAccountSecret): ethers.Wallet | ethers.HDNodeWallet {
   if (secret.kind === 'mnemonic') {
     if (!secret.mnemonic || !secret.derivationPath) {
       throw new Error('Ethereum mnemonic account is missing derivation data.');
@@ -239,7 +268,7 @@ function ethereumWalletFromSecret(secret: AccountSecret): ethers.Wallet | ethers
   return new ethers.Wallet(normalizeHex(secret.privateKey));
 }
 
-function solanaKeypairFromSecret(secret: AccountSecret): Keypair {
+function solanaKeypairFromSecret(secret: ResolvedAccountSecret): Keypair {
   if (secret.kind === 'mnemonic') {
     if (!secret.mnemonic || !secret.derivationPath) {
       throw new Error('Solana mnemonic account is missing derivation data.');
@@ -362,10 +391,6 @@ export class WalletService {
     };
   }
 
-  async createMnemonic(): Promise<{ mnemonic: string }> {
-    return { mnemonic: generateMnemonic(wordlist, 128) };
-  }
-
   async unlock(request: UnlockRequest): Promise<WalletPublicState> {
     if (!this.vaultFile) {
       await this.initialize();
@@ -407,6 +432,7 @@ export class WalletService {
     return this.publicState ?? {
       version: 1,
       accounts: [],
+      seedGroups: [],
       networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
       tokens: [...DEFAULT_TOKENS] as TokenConfig[],
       history: [],
@@ -473,28 +499,67 @@ export class WalletService {
     assertUnlocked(this.vault);
     await this.confirmPassphrase(request.passphrase);
     const account = await this.getAccount(request.accountId);
-    const secret = this.vault.secrets[account.id];
+    const secret = this.accountSecret(account.id);
     if (secret?.kind === 'mnemonic' && secret.mnemonic) {
       return {
         accountId: account.id,
-        secretKind: 'mnemonic',
         mnemonic: secret.mnemonic,
         derivationPath: secret.derivationPath,
       };
     }
-    if (secret?.kind === 'private-key' && secret.privateKey) {
-      return {
-        accountId: account.id,
-        secretKind: 'private-key',
-        privateKey: secret.privateKey,
-      };
-    }
-    throw new Error('This account has no backup secret available.');
+    throw new Error('This account is not backed by a recovery phrase.');
+  }
+
+  async revealAccountPrivateKey(request: RevealAccountPrivateKeyRequest): Promise<RevealAccountPrivateKeyResult> {
+    assertUnlocked(this.vault);
+    await this.confirmPassphrase(request.passphrase);
+    const account = await this.getAccount(request.accountId);
+    const secret = this.accountSecret(account.id);
+    return {
+      accountId: account.id,
+      chain: account.chain,
+      privateKey: account.chain === 'ethereum'
+        ? ethereumWalletFromSecret(secret).privateKey
+        : ethers.hexlify(solanaKeypairFromSecret(secret).secretKey.slice(0, 32)),
+    };
   }
 
   async listAccounts(): Promise<WalletAccount[]> {
     const state = await this.getPublicState();
     return state.accounts;
+  }
+
+  async createAccount(request: CreateAccountRequest): Promise<CreateAccountResult> {
+    assertUnlocked(this.vault);
+    const chains = request.chains ?? (['ethereum', 'solana'] satisfies Chain[]);
+    let group = request.seedGroupId ? this.vault.seedGroups[request.seedGroupId] : undefined;
+    let mnemonic: string | undefined;
+    const timestamp = nowIso();
+
+    if (!group) {
+      mnemonic = generateMnemonic(wordlist, 128);
+      group = {
+        id: newSeedGroupId(),
+        name: request.walletName || `Wallet ${Object.keys(this.vault.seedGroups).length + 1}`,
+        mnemonic,
+        nextAccountIndex: 0,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      this.vault.seedGroups[group.id] = group;
+    }
+
+    const accountIndex = group.nextAccountIndex;
+    this.addSeedGroupAccounts(group, accountIndex, chains, request.name);
+    group.nextAccountIndex = accountIndex + 1;
+    group.updatedAt = timestamp;
+    await this.persist();
+    return {
+      state: publicStateFromVault(this.vault),
+      seedGroupId: group.id,
+      accountIndex,
+      mnemonic,
+    };
   }
 
   async importMnemonic(request: ImportMnemonicRequest): Promise<WalletPublicState> {
@@ -509,32 +574,19 @@ export class WalletService {
     }
 
     const index = request.accountIndex ?? 0;
-    const added: WalletAccount[] = [];
-    for (const chain of request.chains) {
-      const path = chain === 'ethereum'
-        ? `m/44'/60'/0'/0/${index}`
-        : `m/44'/501'/${index}'/0'`;
-      const secret: AccountSecret = {
-        chain,
-        kind: 'mnemonic',
-        mnemonic,
-        derivationPath: path,
-      };
-      const address = chain === 'ethereum'
-        ? ethereumWalletFromSecret(secret).address
-        : solanaKeypairFromSecret(secret).publicKey.toBase58();
-      const account: WalletAccount = {
-        id: accountId(chain, address),
-        chain,
-        name: request.name || `${chain === 'ethereum' ? 'Ethereum' : 'Solana'} ${index + 1}`,
-        address,
-        derivationPath: path,
-        secretKind: 'mnemonic',
-        createdAt: nowIso(),
-      };
-      this.upsertAccount(account, secret);
-      added.push(account);
-    }
+    const timestamp = nowIso();
+    const group: SeedGroupSecret = {
+      id: newSeedGroupId(),
+      name: request.walletName || request.name || `Wallet ${Object.keys(this.vault.seedGroups).length + 1}`,
+      mnemonic,
+      nextAccountIndex: index,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.vault.seedGroups[group.id] = group;
+    const added = this.addSeedGroupAccounts(group, index, request.chains, request.name);
+    group.nextAccountIndex = Math.max(group.nextAccountIndex, index + 1);
+    group.updatedAt = timestamp;
 
     if (added.length === 0) {
       throw new Error('No chains selected for mnemonic import.');
@@ -639,10 +691,7 @@ export class WalletService {
     assertUnlocked(this.vault);
     await this.confirmIfRequired('message-signing', request.passphrase);
     const account = await this.getAccount(request.accountId);
-    const secret = this.vault.secrets[account.id];
-    if (!secret) {
-      throw new Error('No secret found for account.');
-    }
+    const secret = this.accountSecret(account.id);
 
     if (account.chain === 'ethereum') {
       const wallet = ethereumWalletFromSecret(secret);
@@ -669,10 +718,7 @@ export class WalletService {
     assertUnlocked(this.vault);
     await this.confirmIfRequired('transaction-signing', request.passphrase);
     const account = await this.getAccount(request.accountId);
-    const secret = this.vault.secrets[account.id];
-    if (!secret) {
-      throw new Error('No secret found for account.');
-    }
+    const secret = this.accountSecret(account.id);
 
     if (account.chain === 'ethereum') {
       const wallet = ethereumWalletFromSecret(secret);
@@ -810,6 +856,69 @@ export class WalletService {
     } catch (err) {
       await w3n.log?.('error', 'Wallet failed to record transaction history', err);
     }
+  }
+
+  private accountSecret(accountIdToFind: string): ResolvedAccountSecret {
+    assertUnlocked(this.vault);
+    const secret = this.vault.secrets[accountIdToFind];
+    if (!secret) {
+      throw new Error('No secret found for account.');
+    }
+    if (secret.kind !== 'mnemonic') {
+      return secret;
+    }
+    const group = secret.seedGroupId ? this.vault.seedGroups[secret.seedGroupId] : undefined;
+    if (!group) {
+      throw new Error('Seed group not found for account.');
+    }
+    return {
+      ...secret,
+      mnemonic: group.mnemonic,
+    };
+  }
+
+  private addSeedGroupAccounts(
+    group: SeedGroupSecret,
+    accountIndex: number,
+    chains: Chain[],
+    name: string | undefined,
+  ): WalletAccount[] {
+    assertUnlocked(this.vault);
+    const added: WalletAccount[] = [];
+    for (const chain of chains) {
+      const path = derivationPath(chain, accountIndex);
+      const secretForDerivation: AccountSecret = {
+        chain,
+        kind: 'mnemonic',
+        seedGroupId: group.id,
+        accountIndex,
+        derivationPath: path,
+      };
+      const address = chain === 'ethereum'
+        ? ethereumWalletFromSecret({ ...secretForDerivation, mnemonic: group.mnemonic }).address
+        : solanaKeypairFromSecret({ ...secretForDerivation, mnemonic: group.mnemonic }).publicKey.toBase58();
+      const account: WalletAccount = {
+        id: accountId(chain, address),
+        chain,
+        name: name || `${group.name} ${accountIndex + 1}`,
+        address,
+        seedGroupId: group.id,
+        accountIndex,
+        derivationPath: path,
+        secretKind: 'mnemonic',
+        createdAt: nowIso(),
+      };
+      const storedSecret: AccountSecret = {
+        chain,
+        kind: 'mnemonic',
+        seedGroupId: group.id,
+        accountIndex,
+        derivationPath: path,
+      };
+      this.upsertAccount(account, storedSecret);
+      added.push(account);
+    }
+    return added;
   }
 
   private refreshTransactionHistoryStatus(
@@ -1050,7 +1159,7 @@ export class WalletService {
 
   private async transferEthereumNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
     assertUnlocked(this.vault);
-    const secret = this.vault.secrets[account.id];
+    const secret = this.accountSecret(account.id);
     const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
     const tx = await wallet.sendTransaction({
       to: request.to,
@@ -1072,7 +1181,7 @@ export class WalletService {
     request: TransferRequest,
   ): Promise<TransferResult> {
     assertUnlocked(this.vault);
-    const secret = this.vault.secrets[account.id];
+    const secret = this.accountSecret(account.id);
     const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
     const contract = new ethers.Contract(token.address, ERC20_ABI, wallet);
     const tx = await contract.transfer(request.to, parseUnits(request.amount, token.decimals));
@@ -1087,7 +1196,7 @@ export class WalletService {
 
   private async transferSolanaNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
     assertUnlocked(this.vault);
-    const secret = this.vault.secrets[account.id];
+    const secret = this.accountSecret(account.id);
     const keypair = solanaKeypairFromSecret(secret);
     const transaction = new Transaction().add(SystemProgram.transfer({
       fromPubkey: keypair.publicKey,
@@ -1111,7 +1220,7 @@ export class WalletService {
     request: TransferRequest,
   ): Promise<TransferResult> {
     assertUnlocked(this.vault);
-    const secret = this.vault.secrets[account.id];
+    const secret = this.accountSecret(account.id);
     const keypair = solanaKeypairFromSecret(secret);
     const mint = new PublicKey(token.address);
     const recipient = new PublicKey(request.to);
