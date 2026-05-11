@@ -1,24 +1,17 @@
 # Wallet
 
-Minimal PrivacySafe wallet app for Ethereum and Solana.
-
-The wallet can create accounts from BIP-39 recovery phrases, import existing recovery phrases as separate seed-backed wallets, import a 32-byte Ethereum private key or Solana seed, show native and tracked token balances, send transfers, sign messages, and sign transactions. Private keys and recovery phrases stay inside this app's encrypted wallet vault.
+Minimal PrivacySafe wallet app.
 
 V1 covers:
-
 - Ethereum and Solana support on mainnet and configured testnets.
-- Account creation from seed-backed wallets, with each new account deriving the next account index.
-- Account import by recovery phrase or private key.
+- Account creation from BIP-39 seed phrases, with each new account deriving the next account index.
+- Account import by seed phrase or private key.
 - Native coin transfers and preconfigured token transfers: ERC-20 on Ethereum and SPL tokens on Solana.
 - Local history for transfers submitted by this wallet, including pending and confirmed transaction status.
-- Wallet-level encryption for recovery phrases and private keys, stored inside PrivacySafe synced storage.
+- Wallet-level encryption for seed phrases and private keys, stored inside PrivacySafe synced storage.
 - Wallet lock and unlock with a wallet password.
 
 ## Dependency Lock Policy
-
-Wallet dependencies are installed from `package-lock.json` with `npm ci --ignore-scripts`. This keeps dependency resolution frozen and avoids package install scripts during the locked install step.
-
-Use:
 
 ```bash
 npm ci --ignore-scripts
@@ -26,22 +19,22 @@ npm run build
 npm run test
 ```
 
-## Seed-Backed Wallets
+Build the wallet into this repository's standalone PrivacySafe app bundle:
 
-The vault stores recovery phrases as seed groups. A seed group has public metadata, such as name and next account index, and private encrypted seed material. Accounts derived from a seed group store only the seed group id, account index, chain, derivation path, and public address.
+```bash
+cd ..
+make build-wallet
+```
 
-Creating a new account uses the selected seed group and increments its account index. If no seed group is selected, the wallet creates a new BIP-39 recovery phrase and stores it as a new seed group. Importing a recovery phrase creates a separate seed group, so the wallet can hold multiple independent seed-backed wallets.
-
-For backup, a seed-backed account can reveal both the base recovery phrase and the derived account private key after wallet password confirmation. A private-key import can reveal only its imported private key.
+The staged app is written to `build/apps/dev.provable.app.wallet`.
 
 ## Storage Mode
 
-The wallet follows Treasure's storage model and uses app synced FS for wallet data. It writes:
-
-- `wallet-vault-v1.json`: wallet-password encrypted secret vault containing recovery phrases and imported private keys.
+The wallet follows the PrivacySafe Treasure app storage model and uses app synced FS for wallet data. It writes:
+- `wallet-vault-v1.json`: wallet-password encrypted secret vault containing seed phrases and imported private keys.
 - `wallet-state-v1.json`: PrivacySafe-synced wallet state containing accounts, public seed group metadata, settings, and history.
 
-The wallet vault is encrypted by the wallet password before it is written to PrivacySafe synced storage. The state file is not wallet-password encrypted, but is stored inside PrivacySafe synced storage.
+The wallet vault is encrypted by the wallet password before it is written to PrivacySafe synced storage, hence it has an additional encryption layer compared to PrivacySafe apps, so that the user can lock the wallet while having other apps open. Locking the wallet also prevents other PrivacySafe apps from calling the Wallet API  (the user will be prompted to unlock).
 
 ## RPC Endpoint Policy
 
@@ -71,28 +64,46 @@ The app has two RPC services:
 - `getBalance({ accountId, tokenId? })`
   Returns native balance for the account, or token balance when `tokenId` is provided.
 
-- `transfer({ accountId, to, amount, tokenId?, passphrase? })`
+- `transfer({ accountId, to, amount, tokenId? })`
   Sends native ETH/SOL or a tracked ERC-20/SPL token transfer.
 
-- `signMessage({ accountId, message, passphrase? })`
+- `signMessage({ accountId, message })`
   Signs a message with the selected account.
 
-- `signTransaction({ accountId, transaction, encoding?, passphrase? })`
+- `signTransaction({ accountId, transaction, encoding? })`
   Signs a transaction with the selected account. Ethereum expects an ethers transaction request object. Solana expects a base64 serialized transaction and returns a base64 signed transaction.
 
 The external service does not expose mnemonic or private-key import methods.
 
+## Internal Service
+
+`WalletInternal` is private to the wallet app. It includes the external methods above plus wallet-management methods used by the UI:
+
+- `status()`
+- `unlock({ passphrase })`
+- `lock()`
+- `updateSettings(settings)`
+- `changePassphrase({ currentPassphrase, newPassphrase })`
+- `resetVault({ passphrase })`
+- `createAccount({ seedGroupId?, chains?, name?, walletName? })`
+- `importMnemonic({ mnemonic, chains, accountIndex?, name?, walletName? })`
+- `importPrivateKey({ chain, privateKey, name? })`
+- `revealRecoveryPhrase({ accountId, passphrase })`
+- `revealAccountPrivateKey({ accountId, passphrase })`
+
+Only the wallet UI can call `WalletInternal`. Other PrivacySafe apps must use `WalletSigner`.
+
 ## External Signing Approval
 
-Current behavior: external `WalletSigner` requests are handled by the hidden service component. The wallet does not yet open a user approval dialog, does not show which app is requesting the signature, and does not prompt for the wallet password on behalf of that app.
+External `WalletSigner` requests are routed through the wallet UI. For transfer, message signing, and transaction signing, the wallet opens an approval prompt, shows the requested action details, and asks the user to approve or reject the request. When the wallet settings require password confirmation, the wallet prompts for the password inside the wallet UI.
 
-If the wallet setting requires password confirmation for transaction signing, `signTransaction` requires `passphrase` in the RPC request. External apps should not have the wallet password, so this mode effectively blocks external transaction signing until a proper wallet approval flow is added.
+External apps should never send wallet passwords. If an external request includes a `passphrase` field, the wallet UI strips it before forwarding the approved request to the private internal wallet service.
 
-Before external transaction signing is production-ready, the wallet should add an approval UI that shows the requesting app, account, network, transaction details, and asks the user to approve or reject with wallet password confirmation when required.
+Current limitation: the approval prompt shows the requester as "External PrivacySafe app". Production should replace this with the actual caller (app) identity once PrivacySafe exposes it to the service handler.
 
 ## Security
 
-This wallet app relies on PrivacySafe encryption and security model. Like the Treasure app, it uses the synced storage model `getAppSyncedFS()` from the Storage app.
+This wallet app relies on PrivacySafe encryption and security model. Like the Treasure app, it uses the synced storage model `getAppSyncedFS()` from the Storage app. The wallet does not depend on Android Keystore or biometric APIs; those are platform implementation details and are not exposed to PrivacySafe apps.
 
 However, this Wallet app uses its own additional encryption for private keys and seed phrases.
 * AES-GCM. The key is derived from the wallet password with scrypt: N=32768, r=8, p=1, dkLen=32, random 16-byte salt, random 12-byte IV.
@@ -100,7 +111,30 @@ However, this Wallet app uses its own additional encryption for private keys and
 2 files are produced:
 * wallet-vault-v1.json:
     - wallet-password encrypted
-    - contains secret material only: recovery phrases, imported private keys, and secret derivation metadata
+    - contains secret material only: seed phrases, imported private keys, and secret derivation metadata
 * wallet-state-v1.json
     - not wallet-password encrypted
     - contains non-secret wallet state: account addresses, public seed group metadata, settings, and history
+
+### Security Notes
+
+The wallet-level encryption envelope is intentionally independent from PrivacySafe storage encryption. PrivacySafe already protects the synced storage layer; the wallet password adds an app-level barrier around seed phrases and imported private keys.
+
+Current parameters are acceptable for this v1 wallet: scrypt with `N=32768`, `r=8`, `p=1` uses roughly 32 MiB of memory and derives a 256-bit AES-GCM key. This is a reasonable cross-platform default for desktop and mobile web runtimes.
+
+Known security assumptions and remaining hardening items:
+
+- The wallet password is kept in memory only while the wallet is unlocked so the vault can be re-encrypted after writes. Locking clears the service references, but JavaScript strings cannot be reliably zeroized.
+- Decrypted seed phrases and private keys live in JavaScript memory while unlocked and while signing. This is acceptable under the PrivacySafe app isolation model.
+- Revealed secrets and copied values are intentionally shown only after wallet password confirmation. Clipboard lifetime is controlled by the host platform, not the wallet.
+- Logs should never include seed phrases, private keys, or wallet passwords. Errors should continue to be reviewed when new code paths are added.
+- Password policy is currently minimal: at least 4 characters. Production may choose to call it a PIN and keep this policy, or require a stronger wallet password if offline vault extraction is in scope.
+
+## Known Limitations
+
+- External approval currently identifies the caller as "External PrivacySafe app". It should show the real caller app identity once PrivacySafe exposes that metadata to service handlers.
+- Raw transaction signing approval displays request details, but full chain-specific transaction decoding is limited. Production should decode high-risk fields such as recipient, value, token approvals, program instructions, chain id, and fees.
+- RPC endpoints are public defaults. Production should use dedicated endpoints or a PrivacySafe-operated relay for higher reliability and better privacy.
+- History is wallet-local state for transfers submitted through this wallet service. It is not a full chain indexer and does not discover inbound transfers or transactions sent by other wallets.
+- Pending transaction recovery is bounded and best-effort. Very old pending entries are marked not included instead of polling forever.
+- Wallet password encrypted vault data is stored in PrivacySafe synced storage. If synced storage is reset or deleted, the wallet cannot recover data unless the user has backed up the recovery phrase/private key.
