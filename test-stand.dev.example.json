@@ -15,22 +15,13 @@
       "url": "http://127.0.0.1:5176",
       "launchComponent": "/index.html"
     },
-    "treasure.app.privacysafe.io": {
-      "dir": "../gitlab/treasure.app.privacysafe.io",
-      "url": "http://127.0.0.1:3031",
+    "wallet-test-external.app.provable.dev": {
+      "dir": "wallet-test-external",
+      "url": "http://127.0.0.1:5177",
       "launchComponent": "/index.html"
     }
   },
-  "startupApp": {
-    "domain": "startup.app.privacysafe.io",
-    "dir": "../startup.app.privacysafe.io",
-    "url": "http://127.0.0.1:3030"
-  },
   "users": [
-    {
-      "idTemplate": "provable startup %d @privacysafe.dev",
-      "testStartup": true
-    },
     {
       "idTemplate": "provable dev %d @privacysafe.dev"
     }
