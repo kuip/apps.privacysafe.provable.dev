@@ -554,6 +554,10 @@ textarea:focus {
   border-color: color-mix(in srgb, #b91c1c 45%, var(--color-border-block-primary-default, #d7dee7));
 }
 
+.delete-warning {
+  padding-bottom: 10px;
+}
+
 .history-panel {
   align-content: start;
   display: grid;

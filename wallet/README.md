@@ -91,3 +91,15 @@ Before external transaction signing is production-ready, the wallet should add a
 
 ## Security
 
+This wallet app relies on PrivacySafe encryption and security model. Like the Treasure app, it uses the synced storage model `getAppSyncedFS()` from the Storage app.
+
+However, this Wallet app uses its own additional encryption for private keys and seed phrases.
+* AES-GCM. The key is derived from the wallet password with scrypt: N=32768, r=8, p=1, dkLen=32, random 16-byte salt, random 12-byte IV.
+
+2 files are produced:
+* wallet-vault-v1.json:
+    - wallet-password encrypted
+    - contains secret material only: recovery phrases, imported private keys, and secret derivation metadata
+* wallet-state-v1.json
+    - not wallet-password encrypted
+    - contains non-secret wallet state: account addresses, public seed group metadata, settings, and history

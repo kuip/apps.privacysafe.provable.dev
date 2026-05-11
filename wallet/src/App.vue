@@ -520,6 +520,7 @@ async function importMnemonic(): Promise<void> {
       walletName: addForm.accountName || undefined,
     });
     generatedMnemonic.value = '';
+    mnemonicForm.mnemonic = '';
     await refresh();
     await refreshSelectedBalances();
     activeTab.value = 'home';
@@ -928,6 +929,7 @@ watch(() => compatibleTokens.value.map(token => token.id).join(','), () => {
 
 onMounted(async () => {
   await run(loadInitialStateWithoutRpc);
+  await run(refresh);
   void refreshSelectedBalances();
   balanceRefreshTimer = window.setInterval(() => {
     void refreshSelectedBalances();
@@ -956,11 +958,11 @@ onUnmounted(() => {
       <article class="vault-dialog">
         <img alt="Wallet" class="vault-logo" src="/logo.svg" />
         <div class="vault-copy">
-          <h1>{{ status.exists ? 'Unlock Wallet' : 'Create Wallet Vault' }}</h1>
+          <h1>{{ status.exists ? 'Unlock Wallet' : 'Create Wallet Password' }}</h1>
           <p>
             {{ status.exists
-              ? 'Enter your wallet password to unlock local signing keys.'
-              : 'Create the encrypted vault before importing or generating any wallet keys.' }}
+              ? 'Enter your wallet password.'
+              : 'Choose a wallet password to encrypt recovery phrases and private keys.' }}
           </p>
         </div>
 
@@ -988,7 +990,7 @@ onUnmounted(() => {
           <p v-if="vaultPasswordTooShort" class="field-error">Password must be at least 4 characters.</p>
           <p v-if="vaultConfirmMismatch" class="field-error">Passwords do not match.</p>
           <button class="btn btn--primary" :disabled="busy || !canSubmitVault" @click="unlockOrCreateVault">
-            {{ status.exists ? 'Unlock wallet' : 'Create vault' }}
+            {{ status.exists ? 'Unlock wallet' : 'Create wallet' }}
           </button>
         </div>
 
@@ -1453,6 +1455,10 @@ onUnmounted(() => {
           <div class="panel__header">
             <h2>Reset Wallet</h2>
           </div>
+          <label>
+            <p>Removes all accounts and data.</p>
+            <span class="delete-warning">Permanent action. Data cannot be recovered.</span>
+          </label>
           <label>
             <span>Wallet password</span>
             <input v-model="resetForm.passphrase" autocomplete="current-password" type="password" />
