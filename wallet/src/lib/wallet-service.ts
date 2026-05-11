@@ -1,34 +1,48 @@
-import { ethers } from 'ethers';
-import {
-  Keypair,
-  LAMPORTS_PER_SOL,
-  PublicKey,
-  SystemProgram,
-  Transaction,
-  VersionedTransaction,
-} from '@solana/web3.js';
-import {
-  createAssociatedTokenAccountInstruction,
-  createTransferInstruction,
-  getAssociatedTokenAddress,
-} from '@solana/spl-token';
-import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from '@scure/bip39';
+import { generateMnemonic, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
-import { scrypt } from '@noble/hashes/scrypt';
-import { derivePath } from 'ed25519-hd-key';
-import { Buffer } from 'buffer';
-import { DEFAULT_NETWORK_LIST, DEFAULT_NETWORKS, DEFAULT_TOKENS, WALLET_STATE_PATH, WALLET_VAULT_PATH } from '@/lib/constants';
+import { DEFAULT_NETWORK_LIST, DEFAULT_NETWORKS, DEFAULT_TOKENS } from '@/lib/constants';
+import { bytesToBase64, randomBytes } from '@/lib/format';
 import {
-  base64ToBytes,
-  bytesToBase64,
-  normalizeHex,
-  parseSecretBytes,
-  randomBytes,
-  utf8Bytes,
-  utf8String,
-} from '@/lib/format';
+  ethereumWalletFromSecret,
+  getEthereumNativeBalance,
+  getEthereumTokenBalance,
+  signEthereumMessage,
+  signEthereumTransaction,
+  transferEthereumNative,
+  transferEthereumToken,
+  waitForEthereumConfirmation,
+} from '@/lib/ethereum-adapter';
+import {
+  getSolanaNativeBalance,
+  getSolanaTokenBalance,
+  signSolanaMessage,
+  signSolanaTransaction,
+  solanaKeypairFromSecret,
+  solanaPrivateKeyFromSecret,
+  transferSolanaNative,
+  transferSolanaToken,
+  waitForSolanaConfirmation,
+} from '@/lib/solana-adapter';
+import {
+  addTransactionHistoryEntry,
+  makeTransactionHistoryEntry,
+  markStalePendingTransactions,
+  pendingTransactionRecoveries,
+  updatePendingTransaction,
+} from '@/lib/history-manager';
 import { jsonRpcWithFallback, rpcUserMessage } from '@/lib/rpc-client';
-import { openJsonStore } from '@/lib/storage';
+import {
+  DEFAULT_WALLET_SETTINGS,
+  decryptVault,
+  deleteWalletStores,
+  encryptVault,
+  makeEmptyVault,
+  normalizePublicState,
+  publicStateFromVault,
+  readWalletStores,
+  writeWalletStores,
+  type WalletVaultFile,
+} from '@/lib/vault-storage';
 import type {
   AccountSecret,
   BalanceRequest,
@@ -41,6 +55,7 @@ import type {
   ImportPrivateKeyRequest,
   NetworkConfig,
   ResetVaultRequest,
+  ResolvedAccountSecret,
   RevealAccountPrivateKeyRequest,
   RevealAccountPrivateKeyResult,
   RevealRecoveryPhraseRequest,
@@ -50,7 +65,6 @@ import type {
   SignMessageResult,
   SignTransactionRequest,
   SignTransactionResult,
-  TransactionHistoryEntry,
   TokenConfig,
   TransferRequest,
   TransferResult,
@@ -58,47 +72,10 @@ import type {
   VaultPlain,
   WalletAccount,
   WalletPublicState,
-  WalletSeedGroup,
   WalletSettings,
   WalletStatus,
 } from '@/lib/types';
 
-type WalletVaultFile = {
-  version: 1;
-  kdf: {
-    name: 'scrypt';
-    salt: string;
-    n: number;
-    r: number;
-    p: number;
-    dkLen: number;
-  };
-  cipher: {
-    name: 'AES-GCM';
-    iv: string;
-    data: string;
-  };
-  updatedAt: string;
-};
-
-type ResolvedAccountSecret = AccountSecret & {
-  mnemonic?: string;
-};
-
-const SCRYPT_PARAMS = { n: 2 ** 15, r: 8, p: 1, dkLen: 32 } as const;
-const ERC20_ABI = [
-  'function balanceOf(address owner) view returns (uint256)',
-  'function transfer(address to, uint256 amount) returns (bool)',
-  'function decimals() view returns (uint8)',
-];
-const ERC20_INTERFACE = new ethers.Interface(ERC20_ABI);
-
-const DEFAULT_SETTINGS: WalletSettings = {
-  requirePasswordForTransfers: true,
-  requirePasswordForMessageSigning: false,
-  requirePasswordForTransactionSigning: true,
-  enableDevelopmentNetworks: false,
-};
 const RPC_REQUEST_TIMEOUT_MS = 12000;
 const TX_CONFIRM_TIMEOUT_MS = 120000;
 const PENDING_TX_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -115,139 +92,10 @@ function newSeedGroupId(): string {
   return `seed:${bytesToBase64(randomBytes(12)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')}`;
 }
 
-function publicSeedGroup(group: SeedGroupSecret): WalletSeedGroup {
-  const { mnemonic: _mnemonic, ...publicGroup } = group;
-  return publicGroup;
-}
-
-function publicStateFromVault(vault: VaultPlain): WalletPublicState {
-  return {
-    version: 1,
-    accounts: vault.accounts,
-    seedGroups: Object.values(vault.seedGroups ?? {}).map(publicSeedGroup),
-    networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
-    tokens: [...DEFAULT_TOKENS] as TokenConfig[],
-    history: vault.history ?? [],
-    settings: vault.settings ?? DEFAULT_SETTINGS,
-    updatedAt: vault.updatedAt,
-  };
-}
-
-function normalizePublicState(state: WalletPublicState | undefined): WalletPublicState | undefined {
-  if (!state) {
-    return undefined;
-  }
-  const defaultNetworkByKey = new Map<string, NetworkConfig>(
-    DEFAULT_NETWORK_LIST.map(network => [network.key, network as NetworkConfig])
-  );
-  const tokensById = new Map([
-    ...DEFAULT_TOKENS.map(token => [token.id, token] as const),
-    ...(state.tokens ?? []).map(token => [token.id, token] as const),
-  ]);
-  const networksByKey = new Map<string, NetworkConfig>([
-    ...DEFAULT_NETWORK_LIST.map(network => [network.key, network as NetworkConfig] as const),
-    ...(state.networks ?? []).map(network => [
-      network.key,
-      {
-        ...(defaultNetworkByKey.get(network.key) ?? {}),
-        ...network,
-        environment: network.environment ?? defaultNetworkByKey.get(network.key)?.environment ?? 'production',
-      } as NetworkConfig,
-    ] as const),
-  ]);
-  return {
-    ...state,
-    seedGroups: state.seedGroups ?? [],
-    networks: Array.from(networksByKey.values()) as NetworkConfig[],
-    tokens: Array.from(tokensById.values()) as TokenConfig[],
-    history: state.history ?? [],
-    settings: {
-      ...DEFAULT_SETTINGS,
-      ...(state.settings ?? {}),
-    },
-  };
-}
-
 function derivationPath(chain: Chain, accountIndex: number): string {
   return chain === 'ethereum'
     ? `m/44'/60'/0'/0/${accountIndex}`
     : `m/44'/501'/${accountIndex}'/0'`;
-}
-
-function normalizeVault(vault: VaultPlain): VaultPlain {
-  return {
-    ...vault,
-    seedGroups: vault.seedGroups ?? {},
-    history: vault.history ?? [],
-    settings: {
-      ...DEFAULT_SETTINGS,
-      ...(vault.settings ?? {}),
-    },
-  };
-}
-
-async function deriveVaultKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
-  const keyBytes = new Uint8Array(scrypt(
-    utf8Bytes(passphrase),
-    salt,
-    { N: SCRYPT_PARAMS.n, r: SCRYPT_PARAMS.r, p: SCRYPT_PARAMS.p, dkLen: SCRYPT_PARAMS.dkLen },
-  ));
-  try {
-    return await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
-  } finally {
-    keyBytes.fill(0);
-  }
-}
-
-async function encryptVault(passphrase: string, vault: VaultPlain): Promise<WalletVaultFile> {
-  const salt = new Uint8Array(randomBytes(16));
-  const iv = new Uint8Array(randomBytes(12));
-  const key = await deriveVaultKey(passphrase, salt);
-  const plain = new Uint8Array(utf8Bytes(JSON.stringify(vault)));
-  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plain));
-
-  return {
-    version: 1,
-    kdf: {
-      name: 'scrypt',
-      salt: bytesToBase64(salt),
-      ...SCRYPT_PARAMS,
-    },
-    cipher: {
-      name: 'AES-GCM',
-      iv: bytesToBase64(iv),
-      data: bytesToBase64(encrypted),
-    },
-    updatedAt: vault.updatedAt,
-  };
-}
-
-async function decryptVault(passphrase: string, file: WalletVaultFile): Promise<VaultPlain> {
-  if (file.version !== 1 || file.kdf.name !== 'scrypt' || file.cipher.name !== 'AES-GCM') {
-    throw new Error('Unsupported wallet vault format.');
-  }
-
-  const key = await deriveVaultKey(passphrase, base64ToBytes(file.kdf.salt));
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: new Uint8Array(base64ToBytes(file.cipher.iv)) },
-    key,
-    new Uint8Array(base64ToBytes(file.cipher.data)),
-  );
-  return normalizeVault(JSON.parse(utf8String(new Uint8Array(decrypted))) as VaultPlain);
-}
-
-function makeEmptyVault(): VaultPlain {
-  const timestamp = nowIso();
-  return {
-    version: 1,
-    accounts: [],
-    seedGroups: {},
-    secrets: {},
-    history: [],
-    settings: { ...DEFAULT_SETTINGS },
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
 }
 
 function assertUnlocked(vault: VaultPlain | undefined): asserts vault is VaultPlain {
@@ -256,98 +104,6 @@ function assertUnlocked(vault: VaultPlain | undefined): asserts vault is VaultPl
   }
 }
 
-function ethereumWalletFromSecret(secret: ResolvedAccountSecret): ethers.Wallet | ethers.HDNodeWallet {
-  if (secret.kind === 'mnemonic') {
-    if (!secret.mnemonic || !secret.derivationPath) {
-      throw new Error('Ethereum mnemonic account is missing derivation data.');
-    }
-    return ethers.HDNodeWallet.fromPhrase(secret.mnemonic, undefined, secret.derivationPath);
-  }
-  if (!secret.privateKey) {
-    throw new Error('Ethereum private key account is missing key material.');
-  }
-  return new ethers.Wallet(normalizeHex(secret.privateKey));
-}
-
-function solanaKeypairFromSecret(secret: ResolvedAccountSecret): Keypair {
-  if (secret.kind === 'mnemonic') {
-    if (!secret.mnemonic || !secret.derivationPath) {
-      throw new Error('Solana mnemonic account is missing derivation data.');
-    }
-    const seed = mnemonicToSeedSync(secret.mnemonic);
-    const derived = derivePath(secret.derivationPath, Buffer.from(seed).toString('hex')).key;
-    return Keypair.fromSeed(derived);
-  }
-  if (!secret.privateKey) {
-    throw new Error('Solana private key account is missing key material.');
-  }
-  const bytes = parseSecretBytes(secret.privateKey);
-  if (bytes.length !== 32) {
-    throw new Error('Solana private key import expects a 32-byte seed.');
-  }
-  return Keypair.fromSeed(bytes);
-}
-
-function formatUnits(raw: bigint, decimals: number): string {
-  return ethers.formatUnits(raw, decimals);
-}
-
-function parseUnits(value: string, decimals: number): bigint {
-  return ethers.parseUnits(value, decimals);
-}
-
-function ethereumExplorer(txHash: string): string {
-  return `https://etherscan.io/tx/${txHash}`;
-}
-
-function ethereumExplorerFor(network: NetworkConfig, txHash: string): string {
-  if (network.key === 'ethereum:sepolia') {
-    return `https://sepolia.etherscan.io/tx/${txHash}`;
-  }
-  if (network.key === 'ethereum:hoodi') {
-    return `https://hoodi.etherscan.io/tx/${txHash}`;
-  }
-  return ethereumExplorer(txHash);
-}
-
-function solanaExplorer(signature: string, network?: NetworkConfig): string {
-  const cluster = network?.key === 'solana:devnet' ? '?cluster=devnet' : '';
-  return `https://explorer.solana.com/tx/${signature}${cluster}`;
-}
-
-type SolanaAccountInfoResult = {
-  value: unknown | null;
-};
-
-type SolanaTokenBalanceResult = {
-  value: {
-    amount?: string;
-  };
-};
-
-type SolanaBalanceResult = {
-  value: number;
-};
-
-type SolanaLatestBlockhashResult = {
-  value: {
-    blockhash: string;
-    lastValidBlockHeight: number;
-  };
-};
-
-type SolanaSignatureStatusesResult = {
-  value: Array<{
-    err: unknown | null;
-    confirmationStatus?: string | null;
-  } | null>;
-};
-
-type EthereumTransactionReceiptResult = {
-  blockNumber?: string;
-  status?: string;
-} | null;
-
 export class WalletService {
   private vault?: VaultPlain;
   private passphrase?: string;
@@ -355,10 +111,9 @@ export class WalletService {
   private publicState?: WalletPublicState;
 
   async initialize(): Promise<void> {
-    const localStore = await openJsonStore('local');
-    const syncedStore = await openJsonStore('synced');
-    this.vaultFile = await localStore.read<WalletVaultFile>(WALLET_VAULT_PATH);
-    this.publicState = normalizePublicState(await syncedStore.read<WalletPublicState>(WALLET_STATE_PATH));
+    const stores = await readWalletStores();
+    this.vaultFile = stores.vaultFile;
+    this.publicState = stores.publicState;
   }
 
   async status(): Promise<WalletStatus> {
@@ -413,14 +168,14 @@ export class WalletService {
     if (!this.publicState) {
       await this.initialize();
     }
-    return this.publicState ?? {
+    return normalizePublicState(this.publicState) ?? {
       version: 1,
       accounts: [],
       seedGroups: [],
       networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
       tokens: [...DEFAULT_TOKENS] as TokenConfig[],
       history: [],
-      settings: { ...DEFAULT_SETTINGS },
+      settings: { ...DEFAULT_WALLET_SETTINGS },
       updatedAt: nowIso(),
     };
   }
@@ -428,7 +183,7 @@ export class WalletService {
   async updateSettings(settings: Partial<WalletSettings>): Promise<WalletPublicState> {
     assertUnlocked(this.vault);
     this.vault.settings = {
-      ...DEFAULT_SETTINGS,
+      ...DEFAULT_WALLET_SETTINGS,
       ...this.vault.settings,
       ...settings,
     };
@@ -462,11 +217,7 @@ export class WalletService {
     if (this.vaultFile) {
       await decryptVault(request.passphrase, this.vaultFile);
     }
-
-    const localStore = await openJsonStore('local');
-    const syncedStore = await openJsonStore('synced');
-    await localStore.delete(WALLET_VAULT_PATH);
-    await syncedStore.delete(WALLET_STATE_PATH);
+    await deleteWalletStores();
 
     this.vault = undefined;
     this.passphrase = undefined;
@@ -484,7 +235,7 @@ export class WalletService {
     await this.confirmPassphrase(request.passphrase);
     const account = await this.getAccount(request.accountId);
     const secret = this.accountSecret(account.id);
-    if (secret?.kind === 'mnemonic' && secret.mnemonic) {
+    if (secret.kind === 'mnemonic' && secret.mnemonic) {
       return {
         accountId: account.id,
         mnemonic: secret.mnemonic,
@@ -504,7 +255,7 @@ export class WalletService {
       chain: account.chain,
       privateKey: account.chain === 'ethereum'
         ? ethereumWalletFromSecret(secret).privateKey
-        : ethers.hexlify(solanaKeypairFromSecret(secret).secretKey.slice(0, 32)),
+        : solanaPrivateKeyFromSecret(secret),
     };
   }
 
@@ -613,21 +364,15 @@ export class WalletService {
     const network = await this.getNetwork(request.networkKey, account.chain);
     try {
       if (request.tokenId) {
-        const token = await this.getToken(request.tokenId);
-        if (token.chain !== account.chain) {
-          throw new Error('Token chain does not match account chain.');
-        }
-        if (token.networkKey !== network.key) {
-          throw new Error('Token network does not match selected network.');
-        }
+        const token = await this.getTokenForAccount(request.tokenId, account, network);
         return account.chain === 'ethereum'
-          ? this.getEthereumTokenBalance(account, network, token)
-          : this.getSolanaTokenBalance(account, network, token);
+          ? getEthereumTokenBalance(this.ethereumRpc.bind(this), account, network, token)
+          : getSolanaTokenBalance(this.solanaRpc.bind(this), account, network, token);
       }
 
       return account.chain === 'ethereum'
-        ? this.getEthereumNativeBalance(account, network)
-        : this.getSolanaNativeBalance(account, network);
+        ? getEthereumNativeBalance(this.ethereumRpc.bind(this), account, network)
+        : getSolanaNativeBalance(this.solanaRpc.bind(this), account, network);
     } catch (err) {
       const message = rpcUserMessage(err);
       if (message) {
@@ -642,29 +387,26 @@ export class WalletService {
     await this.confirmIfRequired('transfer', request.passphrase);
     const account = await this.getAccount(request.accountId);
     const network = await this.getNetwork(request.networkKey, account.chain);
-    let result: TransferResult;
-    if (request.tokenId) {
-      const token = await this.getToken(request.tokenId);
-      if (token.chain !== account.chain) {
-        throw new Error('Token chain does not match account chain.');
-      }
-      if (token.networkKey !== network.key) {
-        throw new Error('Token network does not match selected network.');
-      }
-      result = await (account.chain === 'ethereum'
-        ? this.transferEthereumToken(account, network, token, request)
-        : this.transferSolanaToken(account, network, token, request));
-      await this.tryRecordTransaction(account, network, request, result, token.symbol);
+    const secret = this.accountSecret(account.id);
+
+    try {
+      const result = request.tokenId
+        ? await this.transferToken(secret, account, network, request)
+        : await this.transferNative(secret, account, network, request);
+      const assetSymbol = request.tokenId
+        ? (await this.getTokenForAccount(request.tokenId, account, network)).symbol
+        : network.nativeSymbol;
+
+      await this.tryRecordTransaction(account, network, request, result, assetSymbol);
       this.refreshTransactionHistoryStatus(account, network, result);
       return result;
+    } catch (err) {
+      const message = rpcUserMessage(err);
+      if (message) {
+        throw new Error(message);
+      }
+      throw err;
     }
-
-    result = await (account.chain === 'ethereum'
-      ? this.transferEthereumNative(account, network, request)
-      : this.transferSolanaNative(account, network, request));
-    await this.tryRecordTransaction(account, network, request, result, network.nativeSymbol);
-    this.refreshTransactionHistoryStatus(account, network, result);
-    return result;
   }
 
   async signMessage(request: SignMessageRequest): Promise<SignMessageResult> {
@@ -673,24 +415,13 @@ export class WalletService {
     const account = await this.getAccount(request.accountId);
     const secret = this.accountSecret(account.id);
 
-    if (account.chain === 'ethereum') {
-      const wallet = ethereumWalletFromSecret(secret);
-      return {
-        accountId: account.id,
-        chain: account.chain,
-        address: account.address,
-        signature: await wallet.signMessage(request.message),
-      };
-    }
-
-    const keypair = solanaKeypairFromSecret(secret);
-    const bytes = utf8Bytes(request.message);
-    const nacl = await import('tweetnacl');
     return {
       accountId: account.id,
       chain: account.chain,
       address: account.address,
-      signature: bytesToBase64(nacl.sign.detached(bytes, keypair.secretKey)),
+      signature: account.chain === 'ethereum'
+        ? await signEthereumMessage(secret, request.message)
+        : await signSolanaMessage(secret, request.message),
     };
   }
 
@@ -701,12 +432,10 @@ export class WalletService {
     const secret = this.accountSecret(account.id);
 
     if (account.chain === 'ethereum') {
-      const wallet = ethereumWalletFromSecret(secret);
-      const signed = await wallet.signTransaction(request.transaction as ethers.TransactionRequest);
       return {
         accountId: account.id,
         chain: account.chain,
-        signedTransaction: signed,
+        signedTransaction: await signEthereumTransaction(secret, request.transaction),
         encoding: 'hex',
       };
     }
@@ -714,23 +443,10 @@ export class WalletService {
     if (request.encoding !== 'base64' || typeof request.transaction !== 'string') {
       throw new Error('Solana signTransaction expects a base64 serialized transaction.');
     }
-    const keypair = solanaKeypairFromSecret(secret);
-    const bytes = base64ToBytes(request.transaction);
-    let signedBytes: Uint8Array;
-    try {
-      const versioned = VersionedTransaction.deserialize(bytes);
-      versioned.sign([keypair]);
-      signedBytes = versioned.serialize();
-    } catch {
-      const tx = Transaction.from(bytes);
-      tx.partialSign(keypair);
-      signedBytes = tx.serialize({ requireAllSignatures: false });
-    }
-
     return {
       accountId: account.id,
       chain: account.chain,
-      signedTransaction: bytesToBase64(signedBytes),
+      signedTransaction: signSolanaTransaction(secret, request.transaction),
       encoding: 'base64',
     };
   }
@@ -756,11 +472,7 @@ export class WalletService {
     this.vault.updatedAt = nowIso();
     this.vaultFile = await encryptVault(this.passphrase, this.vault);
     this.publicState = publicStateFromVault(this.vault);
-
-    const localStore = await openJsonStore('local');
-    const syncedStore = await openJsonStore('synced');
-    await localStore.write(WALLET_VAULT_PATH, this.vaultFile);
-    await syncedStore.write(WALLET_STATE_PATH, this.publicState);
+    await writeWalletStores(this.vaultFile, this.publicState);
   }
 
   private async confirmPassphrase(passphrase: string | undefined): Promise<void> {
@@ -779,7 +491,7 @@ export class WalletService {
   ): Promise<void> {
     assertUnlocked(this.vault);
     const settings = {
-      ...DEFAULT_SETTINGS,
+      ...DEFAULT_WALLET_SETTINGS,
       ...this.vault.settings,
     };
     const required = operation === 'transfer'
@@ -788,40 +500,9 @@ export class WalletService {
         ? settings.requirePasswordForMessageSigning
         : settings.requirePasswordForTransactionSigning;
 
-    if (!required) {
-      return;
+    if (required) {
+      await this.confirmPassphrase(passphrase);
     }
-    await this.confirmPassphrase(passphrase);
-  }
-
-  private async recordTransaction(
-    account: WalletAccount,
-    network: NetworkConfig,
-    request: TransferRequest,
-    result: TransferResult,
-    assetSymbol: string,
-  ): Promise<void> {
-    assertUnlocked(this.vault);
-    const entry: TransactionHistoryEntry = {
-      id: `${Date.now()}:${result.signature}`,
-      accountId: account.id,
-      chain: account.chain,
-      networkKey: network.key,
-      assetSymbol,
-      status: result.status,
-      amount: request.amount,
-      from: account.address,
-      to: request.to,
-      signature: result.signature,
-      txHash: result.signature,
-      value: `${request.amount} ${assetSymbol}`,
-      blockNumber: result.blockNumber,
-      confirmedAt: result.confirmedAt,
-      explorerUrl: result.explorerUrl,
-      createdAt: nowIso(),
-    };
-    this.vault.history = [entry, ...(this.vault.history ?? [])].slice(0, 1000);
-    await this.persist();
   }
 
   private async tryRecordTransaction(
@@ -832,7 +513,9 @@ export class WalletService {
     assetSymbol: string,
   ): Promise<void> {
     try {
-      await this.recordTransaction(account, network, request, result, assetSymbol);
+      assertUnlocked(this.vault);
+      addTransactionHistoryEntry(this.vault, makeTransactionHistoryEntry(account, network, request, result, assetSymbol));
+      await this.persist();
     } catch (err) {
       await w3n.log?.('error', 'Wallet failed to record transaction history', err);
     }
@@ -888,14 +571,7 @@ export class WalletService {
         secretKind: 'mnemonic',
         createdAt: nowIso(),
       };
-      const storedSecret: AccountSecret = {
-        chain,
-        kind: 'mnemonic',
-        seedGroupId: group.id,
-        accountIndex,
-        derivationPath: path,
-      };
-      this.upsertAccount(account, storedSecret);
+      this.upsertAccount(account, secretForDerivation);
       added.push(account);
     }
     return added;
@@ -912,23 +588,14 @@ export class WalletService {
 
     void (async () => {
       const confirmation = account.chain === 'ethereum'
-        ? await this.waitForEthereumConfirmation(network, result.signature)
-        : await this.waitForSolanaConfirmation(network, result.signature);
+        ? await waitForEthereumConfirmation(this.ethereumRpc.bind(this), network, result.signature, TX_CONFIRM_TIMEOUT_MS)
+        : await waitForSolanaConfirmation(this.solanaRpc.bind(this), network, result.signature, TX_CONFIRM_TIMEOUT_MS);
       if (!this.vault || confirmation.status === 'pending') {
         return;
       }
-      const entry = (this.vault.history ?? []).find(item => (
-        item.accountId === account.id
-        && item.networkKey === network.key
-        && item.signature === result.signature
-      ));
-      if (!entry) {
-        return;
+      if (updatePendingTransaction(this.vault, account, network, result, confirmation)) {
+        await this.persist();
       }
-      entry.status = confirmation.status;
-      entry.confirmedAt = confirmation.confirmedAt;
-      entry.blockNumber = confirmation.blockNumber ?? entry.blockNumber;
-      await this.persist();
     })().catch(err => {
       void w3n.log?.('error', `Wallet failed to refresh transaction status ${result.signature}`, err);
     });
@@ -938,30 +605,9 @@ export class WalletService {
     if (!this.vault) {
       return;
     }
-    const now = Date.now();
-    let markedStale = false;
-    for (const entry of this.vault.history ?? []) {
-      if (entry.status !== 'pending') {
-        continue;
-      }
-      const createdAt = Date.parse(entry.createdAt);
-      if (!Number.isNaN(createdAt) && now - createdAt > PENDING_TX_RECOVERY_MAX_AGE_MS) {
-        entry.status = 'not_included';
-        markedStale = true;
-        continue;
-      }
-      const account = this.vault.accounts.find(item => item.id === entry.accountId);
-      const network = [...DEFAULT_NETWORK_LIST].find(item => item.key === entry.networkKey && item.chain === entry.chain) as NetworkConfig | undefined;
-      if (!account || !network) {
-        continue;
-      }
-      this.refreshTransactionHistoryStatus(account, network, {
-        accountId: entry.accountId,
-        chain: entry.chain,
-        signature: entry.signature,
-        status: 'pending',
-        explorerUrl: entry.explorerUrl,
-      });
+    const markedStale = markStalePendingTransactions(this.vault, PENDING_TX_RECOVERY_MAX_AGE_MS);
+    for (const recovery of pendingTransactionRecoveries(this.vault, PENDING_TX_RECOVERY_MAX_AGE_MS)) {
+      this.refreshTransactionHistoryStatus(recovery.account, recovery.network, recovery.result);
     }
     if (markedStale) {
       void this.persist().catch(err => {
@@ -988,6 +634,17 @@ export class WalletService {
     return token;
   }
 
+  private async getTokenForAccount(tokenId: string, account: WalletAccount, network: NetworkConfig): Promise<TokenConfig> {
+    const token = await this.getToken(tokenId);
+    if (token.chain !== account.chain) {
+      throw new Error('Token chain does not match account chain.');
+    }
+    if (token.networkKey !== network.key) {
+      throw new Error('Token network does not match selected network.');
+    }
+    return token;
+  }
+
   private async getNetwork(networkKey: string | undefined, chain: Chain): Promise<NetworkConfig> {
     const state = await this.getPublicState();
     const fallback = chain === 'ethereum' ? DEFAULT_NETWORKS.ethereum : DEFAULT_NETWORKS.solana;
@@ -1005,8 +662,22 @@ export class WalletService {
     ]));
   }
 
-  private ethereumProvider(network: NetworkConfig, rpcUrl: string = network.rpcUrl): ethers.JsonRpcProvider {
-    return new ethers.JsonRpcProvider(rpcUrl, network.chainId);
+  private async ethereumRpc<T>(
+    network: NetworkConfig,
+    method: string,
+    params: unknown[],
+    label: string,
+  ): Promise<T> {
+    return this.rpc('ethereum', network, method, params, label);
+  }
+
+  private async solanaRpc<T>(
+    network: NetworkConfig,
+    method: string,
+    params: unknown[],
+    label: string,
+  ): Promise<T> {
+    return this.rpc('solana', network, method, params, label);
   }
 
   private async rpc<T>(
@@ -1029,260 +700,29 @@ export class WalletService {
     });
   }
 
-  private async getEthereumNativeBalance(account: WalletAccount, network: NetworkConfig): Promise<BalanceResult> {
-    const rawHex = await this.rpc<string>('ethereum', network, 'eth_getBalance', [account.address, 'latest'], 'native balance');
-    const raw = BigInt(rawHex);
-    return {
-      accountId: account.id,
-      symbol: network.nativeSymbol,
-      raw: raw.toString(),
-      formatted: formatUnits(raw, 18),
-    };
-  }
-
-  private async getSolanaNativeBalance(account: WalletAccount, network: NetworkConfig): Promise<BalanceResult> {
-    const result = await this.rpc<SolanaBalanceResult>('solana', network, 'getBalance', [account.address], 'native balance');
-    const raw = result.value;
-    return {
-      accountId: account.id,
-      symbol: network.nativeSymbol,
-      raw: String(raw),
-      formatted: String(raw / LAMPORTS_PER_SOL),
-    };
-  }
-
-  private async getEthereumTokenBalance(account: WalletAccount, network: NetworkConfig, token: TokenConfig): Promise<BalanceResult> {
-    const data = ERC20_INTERFACE.encodeFunctionData('balanceOf', [account.address]);
-    const rawHex = await this.rpc<string>(
-      'ethereum',
-      network,
-      'eth_call',
-      [{ to: token.address, data }, 'latest'],
-      `${token.symbol} token balance`,
-    );
-    const [raw] = ERC20_INTERFACE.decodeFunctionResult('balanceOf', rawHex) as unknown as [bigint];
-    return {
-      accountId: account.id,
-      symbol: token.symbol,
-      raw: raw.toString(),
-      formatted: formatUnits(raw, token.decimals),
-    };
-  }
-
-  private async getSolanaTokenBalance(account: WalletAccount, network: NetworkConfig, token: TokenConfig): Promise<BalanceResult> {
-    const tokenAccount = await getAssociatedTokenAddress(
-      new PublicKey(token.address),
-      new PublicKey(account.address),
-    );
-    const accountInfo = await this.rpc<SolanaAccountInfoResult>('solana', network, 'getAccountInfo', [
-      tokenAccount.toBase58(),
-      { encoding: 'base64' },
-    ], `${token.symbol} token account lookup`);
-    if (!accountInfo.value) {
-      return {
-        accountId: account.id,
-        symbol: token.symbol,
-        raw: '0',
-        formatted: formatUnits(0n, token.decimals),
-      };
-    }
-    const balance = await this.rpc<SolanaTokenBalanceResult>('solana', network, 'getTokenAccountBalance', [
-      tokenAccount.toBase58(),
-    ], `${token.symbol} token balance`);
-    const raw = BigInt(balance.value.amount ?? '0');
-    return {
-      accountId: account.id,
-      symbol: token.symbol,
-      raw: raw.toString(),
-      formatted: formatUnits(raw, token.decimals),
-    };
-  }
-
-  private async transferEthereumNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
-    assertUnlocked(this.vault);
-    const secret = this.accountSecret(account.id);
-    const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
-    const tx = await wallet.sendTransaction({
-      to: request.to,
-      value: parseUnits(request.amount, 18),
-    });
-    return {
-      accountId: account.id,
-      chain: account.chain,
-      signature: tx.hash,
-      status: 'pending',
-      explorerUrl: ethereumExplorerFor(network, tx.hash),
-    };
-  }
-
-  private async transferEthereumToken(
+  private async transferNative(
+    secret: ResolvedAccountSecret,
     account: WalletAccount,
     network: NetworkConfig,
-    token: TokenConfig,
     request: TransferRequest,
   ): Promise<TransferResult> {
-    assertUnlocked(this.vault);
-    const secret = this.accountSecret(account.id);
-    const wallet = ethereumWalletFromSecret(secret).connect(this.ethereumProvider(network));
-    const contract = new ethers.Contract(token.address, ERC20_ABI, wallet);
-    const tx = await contract.transfer(request.to, parseUnits(request.amount, token.decimals));
-    return {
-      accountId: account.id,
-      chain: account.chain,
-      signature: tx.hash,
-      status: 'pending',
-      explorerUrl: ethereumExplorerFor(network, tx.hash),
-    };
+    return account.chain === 'ethereum'
+      ? transferEthereumNative(secret, account, network, request)
+      : transferSolanaNative(this.solanaRpc.bind(this), secret, account, network, request);
   }
 
-  private async transferSolanaNative(account: WalletAccount, network: NetworkConfig, request: TransferRequest): Promise<TransferResult> {
-    assertUnlocked(this.vault);
-    const secret = this.accountSecret(account.id);
-    const keypair = solanaKeypairFromSecret(secret);
-    const transaction = new Transaction().add(SystemProgram.transfer({
-      fromPubkey: keypair.publicKey,
-      toPubkey: new PublicKey(request.to),
-      lamports: Number(parseUnits(request.amount, 9)),
-    }));
-    const signature = await this.sendSolanaTransaction(network, transaction, keypair);
-    return {
-      accountId: account.id,
-      chain: account.chain,
-      signature,
-      status: 'pending',
-      explorerUrl: solanaExplorer(signature, network),
-    };
-  }
-
-  private async transferSolanaToken(
+  private async transferToken(
+    secret: ResolvedAccountSecret,
     account: WalletAccount,
     network: NetworkConfig,
-    token: TokenConfig,
     request: TransferRequest,
   ): Promise<TransferResult> {
-    assertUnlocked(this.vault);
-    const secret = this.accountSecret(account.id);
-    const keypair = solanaKeypairFromSecret(secret);
-    const mint = new PublicKey(token.address);
-    const recipient = new PublicKey(request.to);
-    const sourceAta = await getAssociatedTokenAddress(mint, keypair.publicKey);
-    const recipientAta = await getAssociatedTokenAddress(mint, recipient);
-    const transaction = new Transaction();
-
-    if (!(await this.solanaAccountExists(network, recipientAta))) {
-      transaction.add(createAssociatedTokenAccountInstruction(
-        keypair.publicKey,
-        recipientAta,
-        recipient,
-        mint,
-      ));
+    if (!request.tokenId) {
+      throw new Error('Token transfer requires a token id.');
     }
-
-    transaction.add(createTransferInstruction(
-      sourceAta,
-      recipientAta,
-      keypair.publicKey,
-      parseUnits(request.amount, token.decimals),
-    ));
-    const signature = await this.sendSolanaTransaction(network, transaction, keypair);
-    return {
-      accountId: account.id,
-      chain: account.chain,
-      signature,
-      status: 'pending',
-      explorerUrl: solanaExplorer(signature, network),
-    };
-  }
-
-  private async waitForEthereumConfirmation(
-    network: NetworkConfig,
-    txHash: string,
-  ): Promise<{ status: TransferResult['status']; confirmedAt?: string; blockNumber?: number }> {
-    const startedAt = Date.now();
-    let seenPending = false;
-    try {
-      while (Date.now() - startedAt < TX_CONFIRM_TIMEOUT_MS) {
-        const receipt = await this.rpc<EthereumTransactionReceiptResult>(
-          'ethereum',
-          network,
-          'eth_getTransactionReceipt',
-          [txHash],
-          'transaction receipt lookup',
-        );
-        if (receipt) {
-          const blockNumber = receipt.blockNumber ? Number.parseInt(receipt.blockNumber, 16) : undefined;
-          return {
-            status: receipt.status === '0x1' ? 'success' : 'failed',
-            confirmedAt: nowIso(),
-            blockNumber,
-          };
-        }
-        seenPending = true;
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      }
-    } catch (err) {
-      await w3n.log?.('error', `Wallet could not confirm Ethereum transaction ${txHash}`, err);
-    }
-    return { status: seenPending ? 'pending' : 'not_included' };
-  }
-
-  private async solanaAccountExists(network: NetworkConfig, publicKey: PublicKey): Promise<boolean> {
-    const result = await this.rpc<SolanaAccountInfoResult>('solana', network, 'getAccountInfo', [
-      publicKey.toBase58(),
-      { encoding: 'base64' },
-    ], 'Solana account lookup');
-    return !!result.value;
-  }
-
-  private async sendSolanaTransaction(
-    network: NetworkConfig,
-    transaction: Transaction,
-    signer: Keypair,
-  ): Promise<string> {
-    const latest = await this.rpc<SolanaLatestBlockhashResult>('solana', network, 'getLatestBlockhash', [
-      { commitment: 'confirmed' },
-    ], 'latest blockhash lookup');
-    transaction.feePayer = signer.publicKey;
-    transaction.recentBlockhash = latest.value.blockhash;
-    transaction.sign(signer);
-    const rawTransaction = bytesToBase64(transaction.serialize());
-    return this.rpc<string>('solana', network, 'sendTransaction', [
-      rawTransaction,
-      {
-        encoding: 'base64',
-        preflightCommitment: 'confirmed',
-        maxRetries: 3,
-      },
-    ], 'transaction broadcast');
-  }
-
-  private async waitForSolanaConfirmation(
-    network: NetworkConfig,
-    signature: string,
-  ): Promise<{ status: TransferResult['status']; confirmedAt?: string; blockNumber?: number }> {
-    const startedAt = Date.now();
-    let seenPending = false;
-    try {
-      while (Date.now() - startedAt < TX_CONFIRM_TIMEOUT_MS) {
-        const result = await this.rpc<SolanaSignatureStatusesResult>('solana', network, 'getSignatureStatuses', [
-          [signature],
-          { searchTransactionHistory: true },
-        ], 'signature status lookup');
-        const status = result.value[0];
-        if (status) {
-          if (status.err) {
-            return { status: 'failed', confirmedAt: nowIso() };
-          }
-          if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
-            return { status: 'success', confirmedAt: nowIso() };
-          }
-          seenPending = true;
-        }
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      }
-    } catch (err) {
-      await w3n.log?.('error', `Wallet could not confirm Solana transaction ${signature}`, err);
-    }
-    return { status: seenPending ? 'pending' : 'not_included' };
+    const token = await this.getTokenForAccount(request.tokenId, account, network);
+    return account.chain === 'ethereum'
+      ? transferEthereumToken(secret, account, network, token, request)
+      : transferSolanaToken(this.solanaRpc.bind(this), secret, account, network, token, request);
   }
 }

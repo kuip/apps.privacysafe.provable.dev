@@ -71,6 +71,10 @@ export interface AccountSecret {
   derivationPath?: string;
 }
 
+export type ResolvedAccountSecret = AccountSecret & {
+  mnemonic?: string;
+};
+
 export interface SeedGroupSecret extends WalletSeedGroup {
   mnemonic: string;
 }
