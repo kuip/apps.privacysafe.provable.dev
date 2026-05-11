@@ -37,10 +37,10 @@ For backup, a seed-backed account can reveal both the base recovery phrase and t
 
 The wallet follows Treasure's storage model and uses app synced FS for wallet data. It writes:
 
-- `wallet-vault-v1.json`: wallet-password encrypted vault containing recovery phrases, imported private keys, accounts, settings, and history.
-- `wallet-state-v1.json`: public wallet state used by the UI and service.
+- `wallet-vault-v1.json`: wallet-password encrypted secret vault containing recovery phrases and imported private keys.
+- `wallet-state-v1.json`: PrivacySafe-synced wallet state containing accounts, public seed group metadata, settings, and history.
 
-The wallet vault is encrypted by the wallet password before it is written to PrivacySafe synced storage.
+The wallet vault is encrypted by the wallet password before it is written to PrivacySafe synced storage. The state file is not wallet-password encrypted, but is stored inside PrivacySafe synced storage.
 
 The app has two RPC services:
 

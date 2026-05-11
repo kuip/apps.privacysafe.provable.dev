@@ -1,6 +1,6 @@
 import { generateMnemonic, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
-import { DEFAULT_NETWORK_LIST, DEFAULT_NETWORKS, DEFAULT_TOKENS } from '@/lib/constants';
+import { DEFAULT_NETWORKS } from '@/lib/constants';
 import { bytesToBase64, randomBytes } from '@/lib/format';
 import {
   ethereumWalletFromSecret,
@@ -36,8 +36,8 @@ import {
   decryptVault,
   deleteWalletStores,
   encryptVault,
+  makeEmptyPublicState,
   makeEmptyVault,
-  normalizePublicState,
   publicStateFromVault,
   readWalletStores,
   writeWalletStores,
@@ -117,15 +117,15 @@ export class WalletService {
   }
 
   async status(): Promise<WalletStatus> {
-    if (!this.vaultFile && !this.publicState) {
+    if (!this.vaultFile) {
       await this.initialize();
     }
 
     return {
       exists: !!this.vaultFile,
       unlocked: !!this.vault,
-      accountCount: this.vault?.accounts.length ?? this.publicState?.accounts.length ?? 0,
-      updatedAt: this.vault?.updatedAt ?? this.publicState?.updatedAt ?? this.vaultFile?.updatedAt,
+      accountCount: this.publicState?.accounts.length ?? 0,
+      updatedAt: this.publicState?.updatedAt ?? this.vault?.updatedAt ?? this.vaultFile?.updatedAt,
     };
   }
 
@@ -138,14 +138,15 @@ export class WalletService {
         throw new Error('Wallet password must be at least 4 characters.');
       }
       this.vault = makeEmptyVault();
+      this.publicState = makeEmptyPublicState();
       this.passphrase = request.passphrase;
       await this.persist();
-      return publicStateFromVault(this.vault);
+      return this.publicState;
     }
 
     this.vault = await decryptVault(request.passphrase, this.vaultFile);
     this.passphrase = request.passphrase;
-    this.publicState = publicStateFromVault(this.vault);
+    this.publicState = publicStateFromVault(this.vault, this.publicState);
     this.recoverPendingTransactions();
     return this.publicState;
   }
@@ -163,32 +164,25 @@ export class WalletService {
 
   async getPublicState(): Promise<WalletPublicState> {
     if (this.vault) {
-      return publicStateFromVault(this.vault);
+      this.publicState = publicStateFromVault(this.vault, this.publicState);
+      return this.publicState;
     }
-    if (!this.publicState) {
+    if (!this.vaultFile && !this.publicState) {
       await this.initialize();
     }
-    return normalizePublicState(this.publicState) ?? {
-      version: 1,
-      accounts: [],
-      seedGroups: [],
-      networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
-      tokens: [...DEFAULT_TOKENS] as TokenConfig[],
-      history: [],
-      settings: { ...DEFAULT_WALLET_SETTINGS },
-      updatedAt: nowIso(),
-    };
+    return this.publicState ?? makeEmptyPublicState();
   }
 
   async updateSettings(settings: Partial<WalletSettings>): Promise<WalletPublicState> {
     assertUnlocked(this.vault);
-    this.vault.settings = {
+    this.publicState = publicStateFromVault(this.vault, this.publicState);
+    this.publicState.settings = {
       ...DEFAULT_WALLET_SETTINGS,
-      ...this.vault.settings,
+      ...this.publicState.settings,
       ...settings,
     };
     await this.persist();
-    return publicStateFromVault(this.vault);
+    return this.publicState;
   }
 
   async changePassphrase(request: ChangePassphraseRequest): Promise<WalletStatus> {
@@ -206,6 +200,7 @@ export class WalletService {
     }
     this.vault = await decryptVault(request.currentPassphrase, this.vaultFile);
     this.passphrase = request.newPassphrase;
+    this.publicState = publicStateFromVault(this.vault, this.publicState);
     await this.persist();
     return this.status();
   }
@@ -290,7 +285,7 @@ export class WalletService {
     group.updatedAt = timestamp;
     await this.persist();
     return {
-      state: publicStateFromVault(this.vault),
+      state: this.currentPublicState(),
       seedGroupId: group.id,
       accountIndex,
       mnemonic,
@@ -328,7 +323,7 @@ export class WalletService {
     }
 
     await this.persist();
-    return publicStateFromVault(this.vault);
+    return this.currentPublicState();
   }
 
   async importPrivateKey(request: ImportPrivateKeyRequest): Promise<WalletPublicState> {
@@ -356,7 +351,7 @@ export class WalletService {
 
     this.upsertAccount(account, secret);
     await this.persist();
-    return publicStateFromVault(this.vault);
+    return this.currentPublicState();
   }
 
   async getBalance(request: BalanceRequest): Promise<BalanceResult> {
@@ -453,11 +448,12 @@ export class WalletService {
 
   private upsertAccount(account: WalletAccount, secret: AccountSecret): void {
     assertUnlocked(this.vault);
-    const idx = this.vault.accounts.findIndex(item => item.id === account.id);
+    const state = this.currentPublicState();
+    const idx = state.accounts.findIndex(item => item.id === account.id);
     if (idx >= 0) {
-      this.vault.accounts[idx] = account;
+      state.accounts[idx] = account;
     } else {
-      this.vault.accounts.push(account);
+      state.accounts.push(account);
     }
     this.vault.secrets[account.id] = secret;
     this.vault.updatedAt = nowIso();
@@ -469,9 +465,10 @@ export class WalletService {
       throw new Error('Wallet passphrase is not available.');
     }
 
+    this.publicState = publicStateFromVault(this.vault, this.publicState);
     this.vault.updatedAt = nowIso();
+    this.publicState.updatedAt = this.vault.updatedAt;
     this.vaultFile = await encryptVault(this.passphrase, this.vault);
-    this.publicState = publicStateFromVault(this.vault);
     await writeWalletStores(this.vaultFile, this.publicState);
   }
 
@@ -492,7 +489,7 @@ export class WalletService {
     assertUnlocked(this.vault);
     const settings = {
       ...DEFAULT_WALLET_SETTINGS,
-      ...this.vault.settings,
+      ...this.currentPublicState().settings,
     };
     const required = operation === 'transfer'
       ? settings.requirePasswordForTransfers
@@ -514,7 +511,7 @@ export class WalletService {
   ): Promise<void> {
     try {
       assertUnlocked(this.vault);
-      addTransactionHistoryEntry(this.vault, makeTransactionHistoryEntry(account, network, request, result, assetSymbol));
+      addTransactionHistoryEntry(this.currentPublicState(), makeTransactionHistoryEntry(account, network, request, result, assetSymbol));
       await this.persist();
     } catch (err) {
       await w3n.log?.('error', 'Wallet failed to record transaction history', err);
@@ -538,6 +535,12 @@ export class WalletService {
       ...secret,
       mnemonic: group.mnemonic,
     };
+  }
+
+  private currentPublicState(): WalletPublicState {
+    assertUnlocked(this.vault);
+    this.publicState = publicStateFromVault(this.vault, this.publicState);
+    return this.publicState;
   }
 
   private addSeedGroupAccounts(
@@ -593,7 +596,7 @@ export class WalletService {
       if (!this.vault || confirmation.status === 'pending') {
         return;
       }
-      if (updatePendingTransaction(this.vault, account, network, result, confirmation)) {
+      if (updatePendingTransaction(this.currentPublicState(), account, network, result, confirmation)) {
         await this.persist();
       }
     })().catch(err => {
@@ -605,8 +608,9 @@ export class WalletService {
     if (!this.vault) {
       return;
     }
-    const markedStale = markStalePendingTransactions(this.vault, PENDING_TX_RECOVERY_MAX_AGE_MS);
-    for (const recovery of pendingTransactionRecoveries(this.vault, PENDING_TX_RECOVERY_MAX_AGE_MS)) {
+    const state = this.currentPublicState();
+    const markedStale = markStalePendingTransactions(state, PENDING_TX_RECOVERY_MAX_AGE_MS);
+    for (const recovery of pendingTransactionRecoveries(state, PENDING_TX_RECOVERY_MAX_AGE_MS)) {
       this.refreshTransactionHistoryStatus(recovery.account, recovery.network, recovery.result);
     }
     if (markedStale) {
@@ -617,7 +621,7 @@ export class WalletService {
   }
 
   private async getAccount(accountIdToFind: string): Promise<WalletAccount> {
-    const accounts = this.vault?.accounts ?? (await this.getPublicState()).accounts;
+    const accounts = (await this.getPublicState()).accounts;
     const account = accounts.find(item => item.id === accountIdToFind);
     if (!account) {
       throw new Error(`Account not found: ${accountIdToFind}`);

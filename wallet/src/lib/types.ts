@@ -81,11 +81,8 @@ export interface SeedGroupSecret extends WalletSeedGroup {
 
 export interface VaultPlain {
   version: 1;
-  accounts: WalletAccount[];
   seedGroups: Record<string, SeedGroupSecret>;
   secrets: Record<string, AccountSecret>;
-  history: TransactionHistoryEntry[];
-  settings: WalletSettings;
   createdAt: string;
   updatedAt: string;
 }

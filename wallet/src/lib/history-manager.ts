@@ -1,5 +1,5 @@
 import { DEFAULT_NETWORK_LIST } from '@/lib/constants';
-import type { NetworkConfig, TransactionHistoryEntry, TransferRequest, TransferResult, VaultPlain, WalletAccount } from '@/lib/types';
+import type { NetworkConfig, TransactionHistoryEntry, TransferRequest, TransferResult, WalletAccount, WalletPublicState } from '@/lib/types';
 
 const MAX_HISTORY_ENTRIES = 1000;
 
@@ -46,18 +46,18 @@ export function makeTransactionHistoryEntry(
   };
 }
 
-export function addTransactionHistoryEntry(vault: VaultPlain, entry: TransactionHistoryEntry): void {
-  vault.history = [entry, ...(vault.history ?? [])].slice(0, MAX_HISTORY_ENTRIES);
+export function addTransactionHistoryEntry(state: WalletPublicState, entry: TransactionHistoryEntry): void {
+  state.history = [entry, ...(state.history ?? [])].slice(0, MAX_HISTORY_ENTRIES);
 }
 
 export function updatePendingTransaction(
-  vault: VaultPlain,
+  state: WalletPublicState,
   account: WalletAccount,
   network: NetworkConfig,
   result: TransferResult,
   confirmation: TransactionConfirmation,
 ): boolean {
-  const entry = (vault.history ?? []).find(item => (
+  const entry = (state.history ?? []).find(item => (
     item.accountId === account.id
     && item.networkKey === network.key
     && item.signature === result.signature
@@ -71,10 +71,10 @@ export function updatePendingTransaction(
   return true;
 }
 
-export function markStalePendingTransactions(vault: VaultPlain, maxAgeMs: number): boolean {
+export function markStalePendingTransactions(state: WalletPublicState, maxAgeMs: number): boolean {
   const now = Date.now();
   let changed = false;
-  for (const entry of vault.history ?? []) {
+  for (const entry of state.history ?? []) {
     if (entry.status !== 'pending') {
       continue;
     }
@@ -87,10 +87,10 @@ export function markStalePendingTransactions(vault: VaultPlain, maxAgeMs: number
   return changed;
 }
 
-export function pendingTransactionRecoveries(vault: VaultPlain, maxAgeMs: number): PendingTransactionRecovery[] {
+export function pendingTransactionRecoveries(state: WalletPublicState, maxAgeMs: number): PendingTransactionRecovery[] {
   const now = Date.now();
   const recoveries: PendingTransactionRecovery[] = [];
-  for (const entry of vault.history ?? []) {
+  for (const entry of state.history ?? []) {
     if (entry.status !== 'pending') {
       continue;
     }
@@ -98,7 +98,7 @@ export function pendingTransactionRecoveries(vault: VaultPlain, maxAgeMs: number
     if (!Number.isNaN(createdAt) && now - createdAt > maxAgeMs) {
       continue;
     }
-    const account = vault.accounts.find(item => item.id === entry.accountId);
+    const account = state.accounts.find(item => item.id === entry.accountId);
     const network = [...DEFAULT_NETWORK_LIST].find(item => (
       item.key === entry.networkKey
       && item.chain === entry.chain

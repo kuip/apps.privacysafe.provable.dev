@@ -43,21 +43,30 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function publicSeedGroup(group: SeedGroupSecret): WalletSeedGroup {
+export function publicSeedGroup(group: SeedGroupSecret): WalletSeedGroup {
   const { mnemonic: _mnemonic, ...publicGroup } = group;
   return publicGroup;
 }
 
-export function publicStateFromVault(vault: VaultPlain): WalletPublicState {
-  return {
+export function makeEmptyPublicState(): WalletPublicState {
+  return normalizePublicState({
     version: 1,
-    accounts: vault.accounts,
-    seedGroups: Object.values(vault.seedGroups ?? {}).map(publicSeedGroup),
+    accounts: [],
+    seedGroups: [],
     networks: [...DEFAULT_NETWORK_LIST] as NetworkConfig[],
     tokens: [...DEFAULT_TOKENS] as TokenConfig[],
-    history: vault.history ?? [],
-    settings: vault.settings ?? DEFAULT_WALLET_SETTINGS,
-    updatedAt: vault.updatedAt,
+    history: [],
+    settings: { ...DEFAULT_WALLET_SETTINGS },
+    updatedAt: nowIso(),
+  })!;
+}
+
+export function publicStateFromVault(vault: VaultPlain, state: WalletPublicState | undefined): WalletPublicState {
+  const normalized = normalizePublicState(state) ?? makeEmptyPublicState();
+  return {
+    ...normalized,
+    seedGroups: Object.values(vault.seedGroups ?? {}).map(publicSeedGroup),
+    updatedAt: normalized.updatedAt || vault.updatedAt,
   };
 }
 
@@ -98,13 +107,11 @@ export function normalizePublicState(state: WalletPublicState | undefined): Wall
 
 function normalizeVault(vault: VaultPlain): VaultPlain {
   return {
-    ...vault,
+    version: 1,
     seedGroups: vault.seedGroups ?? {},
-    history: vault.history ?? [],
-    settings: {
-      ...DEFAULT_WALLET_SETTINGS,
-      ...(vault.settings ?? {}),
-    },
+    secrets: vault.secrets ?? {},
+    createdAt: vault.createdAt ?? nowIso(),
+    updatedAt: vault.updatedAt ?? nowIso(),
   };
 }
 
@@ -112,11 +119,8 @@ export function makeEmptyVault(): VaultPlain {
   const timestamp = nowIso();
   return {
     version: 1,
-    accounts: [],
     seedGroups: {},
     secrets: {},
-    history: [],
-    settings: { ...DEFAULT_WALLET_SETTINGS },
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -190,7 +194,7 @@ export async function readWalletStores(): Promise<{
 export async function writeWalletStores(vaultFile: WalletVaultFile, publicState: WalletPublicState): Promise<void> {
   const syncedStore = await openJsonStore('synced');
   await syncedStore.write(WALLET_VAULT_PATH, vaultFile);
-  await syncedStore.write(WALLET_STATE_PATH, publicState);
+  await syncedStore.write(WALLET_STATE_PATH, normalizePublicState(publicState));
 }
 
 export async function deleteWalletStores(): Promise<void> {
