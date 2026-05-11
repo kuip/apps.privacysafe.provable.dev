@@ -215,6 +215,8 @@ cd ../gitlab
 ./build-apps.sh wallet
 ```
 
+The build script installs app dependencies from their checked-in lockfiles. For the wallet this means `npm ci --ignore-scripts` before `npm run build`, so dependency resolution fails if `package-lock.json` is stale.
+
 Start `core-platform-electron` in test-stand mode:
 
 ```bash

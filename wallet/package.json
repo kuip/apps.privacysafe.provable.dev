@@ -3,9 +3,14 @@
   "version": "0.1.0",
   "description": "Minimal Ethereum and Solana wallet for PrivacySafe",
   "type": "module",
+  "packageManager": "npm@10.9.2",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build && vite build --config vite.deno.config.ts",
+    "deps:locked": "npm ci --ignore-scripts",
     "pack": "node scripts/pack-app.mjs",
     "pack:discovery": "node scripts/build-discovery-site.mjs",
     "serve": "vite preview"

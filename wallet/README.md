@@ -14,6 +14,17 @@ V1 covers:
 - Wallet-level encryption for recovery phrases and private keys, stored inside PrivacySafe encrypted storage.
 - Wallet lock and unlock with a wallet password.
 
+## Dependency Lock Policy
+
+Wallet dependencies are installed from `package-lock.json` with `npm ci --ignore-scripts`. This keeps dependency resolution frozen and avoids package install scripts during the locked install step.
+
+Use:
+
+```bash
+npm ci --ignore-scripts
+npm run build
+```
+
 ## Seed-Backed Wallets
 
 The vault stores recovery phrases as seed groups. A seed group has public metadata, such as name and next account index, and private encrypted seed material. Accounts derived from a seed group store only the seed group id, account index, chain, derivation path, and public address.
