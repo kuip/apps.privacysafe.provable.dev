@@ -55,35 +55,11 @@
             },
             {
               "schema": "https",
-              "domain": "eth.llamarpc.com"
-            },
-            {
-              "schema": "https",
-              "domain": "ethereum.drpc.org"
-            },
-            {
-              "schema": "https",
-              "domain": "rpc.flashbots.net"
-            },
-            {
-              "schema": "https",
-              "domain": "sepolia.drpc.org"
-            },
-            {
-              "schema": "https",
-              "domain": "rpc.hoodi.ethpandaops.io"
+              "domain": "ethereum-sepolia-rpc.publicnode.com"
             },
             {
               "schema": "https",
               "domain": "ethereum-hoodi-rpc.publicnode.com"
-            },
-            {
-              "schema": "https",
-              "domain": "0xrpc.io"
-            },
-            {
-              "schema": "https",
-              "domain": "api.mainnet-beta.solana.com"
             },
             {
               "schema": "https",
@@ -127,35 +103,11 @@
             },
             {
               "schema": "https",
-              "domain": "eth.llamarpc.com"
-            },
-            {
-              "schema": "https",
-              "domain": "ethereum.drpc.org"
-            },
-            {
-              "schema": "https",
-              "domain": "rpc.flashbots.net"
-            },
-            {
-              "schema": "https",
-              "domain": "sepolia.drpc.org"
-            },
-            {
-              "schema": "https",
-              "domain": "rpc.hoodi.ethpandaops.io"
+              "domain": "ethereum-sepolia-rpc.publicnode.com"
             },
             {
               "schema": "https",
               "domain": "ethereum-hoodi-rpc.publicnode.com"
-            },
-            {
-              "schema": "https",
-              "domain": "0xrpc.io"
-            },
-            {
-              "schema": "https",
-              "domain": "api.mainnet-beta.solana.com"
             },
             {
               "schema": "https",

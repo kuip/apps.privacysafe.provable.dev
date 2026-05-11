@@ -13,9 +13,6 @@ export const DEFAULT_NETWORKS = {
     rpcUrl: 'https://ethereum-rpc.publicnode.com',
     rpcUrls: [
       'https://ethereum-rpc.publicnode.com',
-      'https://eth.llamarpc.com',
-      'https://ethereum.drpc.org',
-      'https://rpc.flashbots.net',
     ],
     chainId: 1,
   },
@@ -25,9 +22,9 @@ export const DEFAULT_NETWORKS = {
     name: 'Ethereum Sepolia',
     environment: 'development',
     nativeSymbol: 'Sepolia ETH',
-    rpcUrl: 'https://sepolia.drpc.org',
+    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
     rpcUrls: [
-      'https://sepolia.drpc.org',
+      'https://ethereum-sepolia-rpc.publicnode.com',
     ],
     chainId: 11155111,
   },
@@ -37,11 +34,9 @@ export const DEFAULT_NETWORKS = {
     name: 'Ethereum Hoodi',
     environment: 'development',
     nativeSymbol: 'Hoodi ETH',
-    rpcUrl: 'https://rpc.hoodi.ethpandaops.io',
+    rpcUrl: 'https://ethereum-hoodi-rpc.publicnode.com',
     rpcUrls: [
-      'https://rpc.hoodi.ethpandaops.io',
       'https://ethereum-hoodi-rpc.publicnode.com',
-      'https://0xrpc.io/hoodi',
     ],
     chainId: 560048,
   },
@@ -54,7 +49,6 @@ export const DEFAULT_NETWORKS = {
     rpcUrl: 'https://solana-rpc.publicnode.com',
     rpcUrls: [
       'https://solana-rpc.publicnode.com',
-      'https://api.mainnet-beta.solana.com',
     ],
   },
   solanaDevnet: {

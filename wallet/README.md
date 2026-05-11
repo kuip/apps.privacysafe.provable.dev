@@ -42,6 +42,16 @@ The wallet follows Treasure's storage model and uses app synced FS for wallet da
 
 The wallet vault is encrypted by the wallet password before it is written to PrivacySafe synced storage. The state file is not wallet-password encrypted, but is stored inside PrivacySafe synced storage.
 
+## RPC Endpoint Policy
+
+The wallet keeps the default RPC allowlist intentionally small:
+
+- Ethereum mainnet, Sepolia, and Hoodi: PublicNode endpoints.
+- Solana mainnet: PublicNode endpoint.
+- Solana devnet: Solana Labs public devnet endpoint.
+
+These public endpoints are for the minimal default wallet. Production deployments should prefer dedicated/private RPC endpoints or a PrivacySafe-operated RPC relay, especially for Solana where public endpoints are rate-limited and may reject high-traffic clients.
+
 The app has two RPC services:
 
 - `WalletInternal`: used only by wallet UI components.
@@ -78,3 +88,6 @@ Current behavior: external `WalletSigner` requests are handled by the hidden ser
 If the wallet setting requires password confirmation for transaction signing, `signTransaction` requires `passphrase` in the RPC request. External apps should not have the wallet password, so this mode effectively blocks external transaction signing until a proper wallet approval flow is added.
 
 Before external transaction signing is production-ready, the wallet should add an approval UI that shows the requesting app, account, network, transaction details, and asks the user to approve or reject with wallet password confirmation when required.
+
+## Security
+
