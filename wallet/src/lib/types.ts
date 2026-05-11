@@ -111,7 +111,9 @@ export interface RevealRecoveryPhraseRequest {
 
 export interface RevealRecoveryPhraseResult {
   accountId: string;
-  mnemonic: string;
+  secretKind: SecretKind;
+  mnemonic?: string;
+  privateKey?: string;
   derivationPath?: string;
 }
 

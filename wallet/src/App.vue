@@ -101,8 +101,11 @@ const passwordDialog = reactive({
 });
 const backupDialog = reactive({
   open: false,
-  phrase: '',
+  title: '',
+  label: '',
+  value: '',
   path: '',
+  copyLabel: '',
 });
 let passwordDialogResolve: ((value: string | null) => void) | undefined;
 let balanceRefreshTimer: number | undefined;
@@ -176,14 +179,30 @@ const vaultConfirmMismatch = computed(() => (
 ));
 const canSubmitVault = computed(() => (
   !!vaultForm.passphrase
-  && (status.value.exists || (!!vaultForm.confirmPassphrase && vaultForm.passphrase === vaultForm.confirmPassphrase))
+  && (status.value.exists || (
+    vaultForm.passphrase.length >= 4
+    && !!vaultForm.confirmPassphrase
+    && vaultForm.passphrase === vaultForm.confirmPassphrase
+  ))
+));
+const vaultPasswordTooShort = computed(() => (
+  !status.value.exists
+  && vaultForm.passphrase.length > 0
+  && vaultForm.passphrase.length < 4
 ));
 const passwordConfirmMismatch = computed(() => (
   passwordForm.confirmPassphrase.length > 0
   && passwordForm.newPassphrase !== passwordForm.confirmPassphrase
 ));
+const newPasswordTooShort = computed(() => (
+  passwordForm.newPassphrase.length > 0
+  && passwordForm.newPassphrase.length < 4
+));
 const transferNeedsPassword = computed(() => state.value.settings.requirePasswordForTransfers);
 const signMessageNeedsPassword = computed(() => state.value.settings.requirePasswordForMessageSigning);
+const backupButtonLabel = computed(() => (
+  selectedAccount.value?.secretKind === 'private-key' ? 'Show private key' : 'Show backup phrase'
+));
 
 function setResult(_text: string): void {
   errorMessage.value = '';
@@ -423,8 +442,11 @@ async function lock(): Promise<void> {
     balanceByKey.value = {};
     balanceErrors.value = {};
     backupDialog.open = false;
-    backupDialog.phrase = '';
+    backupDialog.title = '';
+    backupDialog.label = '';
+    backupDialog.value = '';
     backupDialog.path = '';
+    backupDialog.copyLabel = '';
     activeTab.value = 'home';
     setResult('');
   });
@@ -627,11 +649,15 @@ async function signMessage(): Promise<void> {
   });
 }
 
-async function revealRecoveryPhrase(): Promise<void> {
+async function revealBackupSecret(): Promise<void> {
   if (!selectedAccountId.value) {
     return;
   }
-  const passphrase = await requestWalletPassword('Show Recovery Phrase', 'Show phrase');
+  const isPrivateKeyAccount = selectedAccount.value?.secretKind === 'private-key';
+  const passphrase = await requestWalletPassword(
+    isPrivateKeyAccount ? 'Show Private Key' : 'Show Backup Phrase',
+    isPrivateKeyAccount ? 'Show key' : 'Show phrase'
+  );
   if (!passphrase) {
     return;
   }
@@ -643,8 +669,11 @@ async function revealRecoveryPhrase(): Promise<void> {
       accountId: selectedAccountId.value,
       passphrase,
     });
-    backupDialog.phrase = result.mnemonic;
+    backupDialog.title = result.secretKind === 'private-key' ? 'Private Key' : 'Backup Phrase';
+    backupDialog.label = result.secretKind === 'private-key' ? 'Private key' : 'Recovery phrase';
+    backupDialog.value = result.secretKind === 'private-key' ? result.privateKey ?? '' : result.mnemonic ?? '';
     backupDialog.path = result.derivationPath ?? '';
+    backupDialog.copyLabel = result.secretKind === 'private-key' ? 'Copy key' : 'Copy phrase';
     backupDialog.open = true;
     setResult('');
   });
@@ -652,14 +681,20 @@ async function revealRecoveryPhrase(): Promise<void> {
 
 function closeBackupDialog(): void {
   backupDialog.open = false;
-  backupDialog.phrase = '';
+  backupDialog.title = '';
+  backupDialog.label = '';
+  backupDialog.value = '';
   backupDialog.path = '';
+  backupDialog.copyLabel = '';
 }
 
 async function changePassphrase(): Promise<void> {
   await run(async () => {
     if (passwordForm.newPassphrase !== passwordForm.confirmPassphrase) {
       throw new Error('New wallet passwords do not match.');
+    }
+    if (passwordForm.newPassphrase.length < 4) {
+      throw new Error('New wallet password must be at least 4 characters.');
     }
     status.value = await serviceCall('changePassphrase', {
       currentPassphrase: passwordForm.currentPassphrase,
@@ -867,6 +902,7 @@ onUnmounted(() => {
               v-model="vaultForm.passphrase"
               :autocomplete="status.exists ? 'current-password' : 'new-password'"
               type="password"
+              :minlength="status.exists ? undefined : 4"
               @keyup.enter="canSubmitVault && unlockOrCreateVault()"
             />
           </label>
@@ -876,9 +912,11 @@ onUnmounted(() => {
               v-model="vaultForm.confirmPassphrase"
               autocomplete="new-password"
               type="password"
+              minlength="4"
               @keyup.enter="canSubmitVault && unlockOrCreateVault()"
             />
           </label>
+          <p v-if="vaultPasswordTooShort" class="field-error">Password must be at least 4 characters.</p>
           <p v-if="vaultConfirmMismatch" class="field-error">Passwords do not match.</p>
           <button class="btn btn--primary" :disabled="busy || !canSubmitVault" @click="unlockOrCreateVault">
             {{ status.exists ? 'Unlock wallet' : 'Create vault' }}
@@ -1135,8 +1173,8 @@ onUnmounted(() => {
         <article class="panel">
           <div class="panel__header">
             <h2>Backup</h2>
-            <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="revealRecoveryPhrase">
-              Show backup phrase
+            <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="revealBackupSecret">
+              {{ backupButtonLabel }}
             </button>
           </div>
         </article>
@@ -1309,16 +1347,17 @@ onUnmounted(() => {
           </label>
           <label>
             <span>New password</span>
-            <input v-model="passwordForm.newPassphrase" autocomplete="new-password" type="password" />
+            <input v-model="passwordForm.newPassphrase" autocomplete="new-password" type="password" minlength="4" />
           </label>
           <label>
             <span>Confirm new password</span>
-            <input v-model="passwordForm.confirmPassphrase" autocomplete="new-password" type="password" />
+            <input v-model="passwordForm.confirmPassphrase" autocomplete="new-password" type="password" minlength="4" />
           </label>
+          <p v-if="newPasswordTooShort" class="field-error">New password must be at least 4 characters.</p>
           <p v-if="passwordConfirmMismatch" class="field-error">Passwords do not match.</p>
           <button
             class="btn btn--primary"
-            :disabled="busy || !passwordForm.currentPassphrase || !passwordForm.newPassphrase || passwordConfirmMismatch"
+            :disabled="busy || !passwordForm.currentPassphrase || !passwordForm.newPassphrase || newPasswordTooShort || passwordConfirmMismatch"
             @click="changePassphrase"
           >
             Change password
@@ -1393,7 +1432,7 @@ onUnmounted(() => {
       <div v-if="backupDialog.open" class="modal-backdrop" @click.self="closeBackupDialog">
         <section class="password-modal backup-modal" role="dialog" aria-modal="true" :aria-labelledby="'backup-dialog-title'">
           <div class="panel__header">
-            <h2 id="backup-dialog-title">Backup Phrase</h2>
+            <h2 id="backup-dialog-title">{{ backupDialog.title }}</h2>
             <button
               class="error-notice__close"
               :disabled="busy"
@@ -1405,13 +1444,13 @@ onUnmounted(() => {
             </button>
           </div>
           <div class="recovery-box">
-            <span>Recovery phrase</span>
-            <code>{{ backupDialog.phrase }}</code>
+            <span>{{ backupDialog.label }}</span>
+            <code>{{ backupDialog.value }}</code>
             <small v-if="backupDialog.path">{{ backupDialog.path }}</small>
           </div>
           <div class="modal-actions">
-            <button class="btn btn--secondary" :disabled="busy" @click="copy(backupDialog.phrase)">
-              Copy phrase
+            <button class="btn btn--secondary" :disabled="busy" @click="copy(backupDialog.value)">
+              {{ backupDialog.copyLabel }}
             </button>
             <button class="btn btn--primary" :disabled="busy" @click="closeBackupDialog">
               Close

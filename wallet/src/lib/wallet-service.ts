@@ -382,6 +382,9 @@ export class WalletService {
       await this.initialize();
     }
     if (!this.vaultFile) {
+      if (request.passphrase.length < 4) {
+        throw new Error('Wallet password must be at least 4 characters.');
+      }
       this.vault = makeEmptyVault();
       this.passphrase = request.passphrase;
       await this.persist();
@@ -438,6 +441,9 @@ export class WalletService {
     if (!request.newPassphrase) {
       throw new Error('New wallet password is required.');
     }
+    if (request.newPassphrase.length < 4) {
+      throw new Error('New wallet password must be at least 4 characters.');
+    }
     if (!this.vaultFile) {
       await this.initialize();
     }
@@ -479,14 +485,22 @@ export class WalletService {
     await this.confirmPassphrase(request.passphrase);
     const account = await this.getAccount(request.accountId);
     const secret = this.vault.secrets[account.id];
-    if (!secret?.mnemonic) {
-      throw new Error('This account was imported from a private key and has no recovery phrase.');
+    if (secret?.kind === 'mnemonic' && secret.mnemonic) {
+      return {
+        accountId: account.id,
+        secretKind: 'mnemonic',
+        mnemonic: secret.mnemonic,
+        derivationPath: secret.derivationPath,
+      };
     }
-    return {
-      accountId: account.id,
-      mnemonic: secret.mnemonic,
-      derivationPath: secret.derivationPath,
-    };
+    if (secret?.kind === 'private-key' && secret.privateKey) {
+      return {
+        accountId: account.id,
+        secretKind: 'private-key',
+        privateKey: secret.privateKey,
+      };
+    }
+    throw new Error('This account has no backup secret available.');
   }
 
   async listAccounts(): Promise<WalletAccount[]> {
