@@ -17,7 +17,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: path.resolve(__dirname, 'index.html'),
-        service: path.resolve(__dirname, 'service.html'),
       },
     },
   },

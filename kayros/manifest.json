@@ -34,8 +34,8 @@
         "minHeight": 620
       }
     },
-    "/service.html": {
-      "runtime": "web-gui",
+    "/service.js": {
+      "runtime": "deno",
       "services": {
         "KayrosNotary": {
           "thisAppComponents": "*",
@@ -58,17 +58,6 @@
           ]
         },
         "logToPlatform": true
-      },
-      "windowOpts": {
-        "width": 1,
-        "height": 1,
-        "minWidth": 1,
-        "minHeight": 1,
-        "resizable": false,
-        "minimizable": false,
-        "maximizable": false,
-        "skipTaskbar": true,
-        "frame": false
       }
     }
   },

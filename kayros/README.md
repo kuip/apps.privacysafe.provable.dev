@@ -5,7 +5,7 @@ This repository scaffolds a PrivacySafe subapp for Kayros cryptographic integrit
 It contains:
 
 - a launcher UI at `/index.html`
-- a web-gui service component at `/service.html`
+- a Deno service component at `/service.js`
 - an RPC service named `KayrosNotary`
 
 The UI talks to the service through `w3n.rpc.thisApp`, and other apps can talk to the same service through `w3n.rpc.otherAppsRPC` once they request the appropriate manifest capability.
@@ -30,6 +30,6 @@ The service currently exposes:
 
 Settings are persisted in this app's local PrivacySafe storage as `settings.json`.
 
-## Important runtime note
+## Runtime note
 
-This prototype uses a web-gui service component instead of a Deno service component, because the current platform host starts Deno components without general outbound network access, which prevents direct calls to the Kayros API.
+The service runs as a Deno component and calls the Kayros API through the app manifest's `connectToExternal.fetch` capability.
