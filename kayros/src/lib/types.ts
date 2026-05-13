@@ -9,6 +9,7 @@ export interface KayrosSettings {
   kayrosHost: string;
   dataType: string;
   userKey: string;
+  saveMerkleProofs: boolean;
 }
 
 export type ServiceRequestBase = Pick<ProveOptions, 'dataType' | 'userKey'> & {
@@ -40,6 +41,7 @@ export interface UploadedFileMetadata {
 export interface NotarizeStoredFileRequest {
   fullFilePath: string;
   metadataPayload: UploadedFileMetadata;
+  fsId?: string | null;
 }
 
 export type RegisterHashResult = {
@@ -85,6 +87,43 @@ export type NotarizeStoredFileResult = {
   status: KayrosUploadStatus;
   proofWritten: boolean;
 };
+
+export interface KayrosProofMeta {
+  currentFilePath: string;
+  fsId?: string | null;
+  originalFilename: string;
+}
+
+export interface ArchivedProofFileRequest extends ServiceRequestBase {
+  dataType: string;
+  contentHash: string;
+}
+
+export interface ArchivedProofBundle {
+  dataType: string;
+  contentHash: string;
+  proof?: KayrosUploadProof;
+  merkleProof?: unknown;
+  meta?: KayrosProofMeta;
+}
+
+export interface ArchivedProofListEntry {
+  dataType: string;
+  contentHash: string;
+  hasProof: boolean;
+  hasMerkleProof: boolean;
+  hasMeta: boolean;
+  meta?: KayrosProofMeta;
+}
+
+export interface ListArchivedProofsRequest extends ServiceRequestBase {
+  dataType?: string;
+}
+
+export interface ListArchivedProofsResult {
+  dataType: string;
+  entries: ArchivedProofListEntry[];
+}
 
 export type LookupRecordResult = {
   request: LookupRecordRequest;

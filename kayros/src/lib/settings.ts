@@ -6,6 +6,9 @@ function normalizeSettings(input?: Partial<KayrosSettings> | null): KayrosSettin
     kayrosHost: input?.kayrosHost?.trim() || DEFAULT_SETTINGS.kayrosHost,
     dataType: input?.dataType?.trim() || DEFAULT_SETTINGS.dataType,
     userKey: input?.userKey?.trim() || DEFAULT_SETTINGS.userKey,
+    saveMerkleProofs: typeof input?.saveMerkleProofs === 'boolean'
+      ? input.saveMerkleProofs
+      : DEFAULT_SETTINGS.saveMerkleProofs,
   };
 }
 

@@ -63,9 +63,20 @@ declare namespace web3n.rpc.service {
 }
 
 declare namespace web3n.storage {
-  interface AppLocalFS {
+  interface AppFS extends web3n.files.WritableFS {
     readJSONFile(path: string): Promise<unknown>;
     writeJSONFile(path: string, json: unknown): Promise<void>;
+  }
+
+  interface AppLocalFS extends AppFS {}
+  interface AppSyncedFS extends AppFS {}
+}
+
+declare namespace web3n.files {
+  interface ListingEntry {
+    name: string;
+    isFolder?: boolean;
+    isFile?: boolean;
   }
 }
 
@@ -89,7 +100,12 @@ declare namespace web3n.files {
   }
 
   interface WritableFS {
+    name: string;
+    type?: string;
+    listFolder(path: string): Promise<web3n.files.ListingEntry[]>;
+    readJSONFile(path: string): Promise<unknown>;
     writeJSONFile(path: string, json: unknown): Promise<void>;
+    writableSubRoot(path: string): Promise<WritableFS>;
   }
 }
 
@@ -97,6 +113,7 @@ declare const w3n: {
   rpc?: web3n.rpc.RPC;
   storage?: {
     getAppLocalFS(): Promise<web3n.storage.AppLocalFS>;
+    getAppSyncedFS(): Promise<web3n.storage.AppSyncedFS>;
   };
   shell?: {
     getFSResource?(

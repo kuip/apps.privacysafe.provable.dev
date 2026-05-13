@@ -1,6 +1,6 @@
 // @ts-nocheck
 
-import { DEFAULT_SETTINGS, KAYROS_SERVICE_NAME, SETTINGS_FILE } from "../src/lib/constants.ts";
+import { DEFAULT_SETTINGS, KAYROS_SERVICE_NAME, PROOFS_ROOT_FOLDER, SETTINGS_FILE } from "../src/lib/constants.ts";
 
 declare const w3n: any;
 
@@ -94,6 +94,9 @@ function normalizeSettings(input?: Record<string, unknown> | null) {
     kayrosHost: (typeof input?.kayrosHost === "string" && input.kayrosHost.trim()) || DEFAULT_SETTINGS.kayrosHost,
     dataType: (typeof input?.dataType === "string" && input.dataType.trim()) || DEFAULT_SETTINGS.dataType,
     userKey: (typeof input?.userKey === "string" && input.userKey.trim()) || DEFAULT_SETTINGS.userKey,
+    saveMerkleProofs: typeof input?.saveMerkleProofs === "boolean"
+      ? input.saveMerkleProofs
+      : DEFAULT_SETTINGS.saveMerkleProofs,
   };
 }
 
@@ -119,6 +122,89 @@ function mergeSettings(base: ReturnType<typeof normalizeSettings>, overrides?: R
     kayrosHost: (typeof overrides?.kayrosHost === "string" && overrides.kayrosHost.trim()) || base.kayrosHost,
     dataType: (typeof overrides?.dataType === "string" && overrides.dataType.trim()) || base.dataType,
     userKey: (typeof overrides?.userKey === "string" && overrides.userKey.trim()) || base.userKey,
+    saveMerkleProofs: typeof overrides?.saveMerkleProofs === "boolean"
+      ? overrides.saveMerkleProofs
+      : base.saveMerkleProofs,
+  };
+}
+
+function normalizeFolderSegment(segment: string): string {
+  const sanitized = segment
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, "_");
+  return sanitized || DEFAULT_SETTINGS.dataType;
+}
+
+function buildProofArchivePaths(dataType: string, contentHash: string) {
+  const dataTypeFolder = normalizeFolderSegment(dataType);
+  return {
+    dataTypeFolder,
+    proofFileName: `${contentHash}_proof.json`,
+    merkleProofFileName: `${contentHash}_merkle-proof.json`,
+    metaFileName: `${contentHash}_meta.json`,
+    proofPath: `${dataTypeFolder}/${contentHash}_proof.json`,
+    merkleProofPath: `${dataTypeFolder}/${contentHash}_merkle-proof.json`,
+    metaPath: `${dataTypeFolder}/${contentHash}_meta.json`,
+  };
+}
+
+async function getProofsRootFS() {
+  const fs = await w3n.storage.getAppSyncedFS();
+  return await fs.writableSubRoot(PROOFS_ROOT_FOLDER);
+}
+
+async function readJSONIfPresent(fs: any, path: string) {
+  try {
+    return await fs.readJSONFile(path);
+  } catch {
+    return undefined;
+  }
+}
+
+async function listFolderIfPresent(fs: any, path: string) {
+  try {
+    return await fs.listFolder(path);
+  } catch {
+    return [];
+  }
+}
+
+async function storeArchivedProofBundle(
+  dataType: string,
+  contentHash: string,
+  proof: any,
+  meta: any,
+  saveMerkleProofs: boolean,
+) {
+  const rootFs = await getProofsRootFS();
+  const archivePaths = buildProofArchivePaths(dataType, contentHash);
+  const folderFs = await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+
+  await folderFs.writeJSONFile(archivePaths.proofFileName, proof);
+  await folderFs.writeJSONFile(archivePaths.metaFileName, meta);
+
+  if (saveMerkleProofs && proof.merkleProof !== undefined) {
+    await folderFs.writeJSONFile(archivePaths.merkleProofFileName, proof.merkleProof);
+  }
+}
+
+async function loadArchivedProofBundle(dataType: string, contentHash: string) {
+  const rootFs = await getProofsRootFS();
+  const archivePaths = buildProofArchivePaths(dataType, contentHash);
+
+  const [proof, merkleProof, meta] = await Promise.all([
+    readJSONIfPresent(rootFs, archivePaths.proofPath),
+    readJSONIfPresent(rootFs, archivePaths.merkleProofPath),
+    readJSONIfPresent(rootFs, archivePaths.metaPath),
+  ]);
+
+  return {
+    dataType,
+    contentHash,
+    proof,
+    merkleProof,
+    meta,
   };
 }
 
@@ -291,23 +377,6 @@ function resolveOverallStatus(content: any, metadata: any) {
   return "partial";
 }
 
-function getFolderPath(fullFilePath: string): string {
-  const pathParts = fullFilePath.split("/");
-  pathParts.pop();
-  return pathParts.join("/") || "";
-}
-
-function buildSidecarFileName(originalName: string, kayrosHash: string): string {
-  return `${originalName}_${kayrosHash}.json`;
-}
-
-function buildSidecarFilePath(fullFilePath: string, kayrosHash: string): string {
-  const folderPath = getFolderPath(fullFilePath);
-  const originalName = fullFilePath.split("/").pop() || "file";
-  const sidecarName = buildSidecarFileName(originalName, kayrosHash);
-  return folderPath ? `${folderPath}/${sidecarName}` : sidecarName;
-}
-
 function buildKayrosXAttrs(proof: any): Record<string, unknown> {
   return {
     kayros_version: proof.version,
@@ -423,7 +492,88 @@ class KayrosService {
     };
   }
 
+  async getProofFile(request: Record<string, unknown>) {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const contentHash = String(request.contentHash ?? "").trim();
+    const bundle = await loadArchivedProofBundle(resolved.dataType, contentHash);
+    return bundle.proof;
+  }
+
+  async getMerkleProofFile(request: Record<string, unknown>) {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const contentHash = String(request.contentHash ?? "").trim();
+    const bundle = await loadArchivedProofBundle(resolved.dataType, contentHash);
+    return bundle.merkleProof;
+  }
+
+  async getProofMeta(request: Record<string, unknown>) {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const contentHash = String(request.contentHash ?? "").trim();
+    const bundle = await loadArchivedProofBundle(resolved.dataType, contentHash);
+    return bundle.meta;
+  }
+
+  async listProofs(request: Record<string, unknown>) {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const rootFs = await getProofsRootFS();
+    const { dataTypeFolder } = buildProofArchivePaths(resolved.dataType, "placeholder");
+    const entries = await listFolderIfPresent(rootFs, dataTypeFolder);
+    const proofsByHash = new Map<string, {
+      dataType: string;
+      contentHash: string;
+      hasProof: boolean;
+      hasMerkleProof: boolean;
+      hasMeta: boolean;
+      meta?: unknown;
+    }>();
+
+    for (const entry of entries) {
+      if (!entry?.name || entry.isFolder) {
+        continue;
+      }
+
+      const match = entry.name.match(/^(.+?)_(proof|meta|merkle-proof)\.json$/);
+      if (!match) {
+        continue;
+      }
+
+      const [, contentHash, kind] = match;
+      const existing = proofsByHash.get(contentHash) || {
+        dataType: resolved.dataType,
+        contentHash,
+        hasProof: false,
+        hasMerkleProof: false,
+        hasMeta: false,
+      };
+
+      if (kind === "proof") {
+        existing.hasProof = true;
+      } else if (kind === "merkle-proof") {
+        existing.hasMerkleProof = true;
+      } else if (kind === "meta") {
+        existing.hasMeta = true;
+        existing.meta = await readJSONIfPresent(rootFs, `${dataTypeFolder}/${entry.name}`);
+      }
+
+      proofsByHash.set(contentHash, existing);
+    }
+
+    return {
+      dataType: resolved.dataType,
+      entries: Array.from(proofsByHash.values()).sort((left, right) => {
+        const leftName = String(left.meta?.originalFilename ?? left.contentHash);
+        const rightName = String(right.meta?.originalFilename ?? right.contentHash);
+        return leftName.localeCompare(rightName);
+      }),
+    };
+  }
+
   async notarizeStoredFile(request: any, file: any, fs: any) {
+    const stored = await readSettings();
     const fileBytes = await file.readBytes();
     if (!fileBytes) {
       throw new Error("Stored file is empty or unreadable.");
@@ -474,9 +624,19 @@ class KayrosService {
       set: buildKayrosXAttrs(proof),
     });
 
-    const sidecarHash = proof.content.response?.hash || proof.content.hash;
-    const sidecarPath = buildSidecarFilePath(request.fullFilePath, sidecarHash);
-    await fs.writeJSONFile(sidecarPath, proof);
+    const archivedDataType = proof.content.request?.dataType || proof.metadata.request?.dataType || stored.dataType;
+
+    await storeArchivedProofBundle(
+      archivedDataType,
+      proof.content.hash,
+      proof,
+      {
+        currentFilePath: request.fullFilePath,
+        fsId: typeof request.fsId === "string" ? request.fsId : null,
+        originalFilename: request.metadataPayload.originalName,
+      },
+      stored.saveMerkleProofs,
+    );
 
     return {
       status: proof.status,
@@ -550,6 +710,42 @@ async function handleCall(connection: any, call: any): Promise<void> {
         callNum,
         callStatus: "end",
         data: encodeJson(await service.lookupDataItem(decodeJson<Record<string, unknown>>(data))),
+      });
+      return;
+    }
+
+    if (method === "getProofFile") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.getProofFile(decodeJson<Record<string, unknown>>(data))),
+      });
+      return;
+    }
+
+    if (method === "getMerkleProofFile") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.getMerkleProofFile(decodeJson<Record<string, unknown>>(data))),
+      });
+      return;
+    }
+
+    if (method === "getProofMeta") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.getProofMeta(decodeJson<Record<string, unknown>>(data))),
+      });
+      return;
+    }
+
+    if (method === "listProofs") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.listProofs(decodeJson<Record<string, unknown>>(data))),
       });
       return;
     }
