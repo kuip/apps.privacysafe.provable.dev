@@ -973,7 +973,7 @@ async function revealBackupPhrase(): Promise<void> {
     return;
   }
   const passphrase = await requestWalletPassword(
-    'Show Backup Phrase',
+    'Show Seed Phrase',
     'Show phrase'
   );
   if (!passphrase) {

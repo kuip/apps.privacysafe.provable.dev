@@ -1,6 +1,6 @@
 # Wallet
 
-Minimal PrivacySafe wallet app.
+Minimal wallet app for PrivacySafe.
 
 V1 covers:
 - Ethereum and Solana support on mainnet and configured testnets.

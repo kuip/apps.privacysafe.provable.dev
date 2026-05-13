@@ -110,7 +110,6 @@ function balanceText(result: BalanceResult | undefined): string {
       </div>
       <div v-if="trackedTokenRows.length" class="token-balance-list">
         <div v-for="row in trackedTokenRows" :key="row.token.id" class="token-balance-row">
-          <span class="token-mark">{{ row.token.symbol.slice(0, 3) }}</span>
           <span class="token-meta">
             <strong>{{ row.token.symbol }}</strong>
             <small>{{ row.token.name }}</small>
@@ -183,7 +182,7 @@ function balanceText(result: BalanceResult | undefined): string {
             :disabled="busy || !selectedAccount"
             @click="emit('revealBackupPhrase')"
           >
-            Show backup phrase
+            Show seed phrase
           </button>
           <button class="btn btn--danger btn--muted-danger" :disabled="busy || !selectedAccount" @click="emit('revealPrivateKey')">
             Show private key

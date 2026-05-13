@@ -151,6 +151,7 @@ describe('Add tab', () => {
     const wrapper = await mountApp();
 
     await wrapper.find('button[aria-label="Add account"]').trigger('click');
+    await wrapper.find('.add-name-field input').setValue('Test account');
     await wrapper.find('textarea[placeholder="BIP-39 mnemonic"]').setValue(TEST_MNEMONIC);
     await wrapper.find('textarea[placeholder="Hex, base58, base64, or JSON byte array"]').setValue(TEST_ETH_PRIVATE_KEY);
     await buttonByText(wrapper, 'Create account').trigger('click');
@@ -166,6 +167,7 @@ describe('Add tab', () => {
     const wrapper = await mountApp();
 
     await wrapper.find('button[aria-label="Add account"]').trigger('click');
+    await wrapper.find('.add-name-field input').setValue('Test account');
     await wrapper.find('textarea[placeholder="BIP-39 mnemonic"]').setValue(TEST_MNEMONIC);
     await buttonByText(wrapper, 'Import').trigger('click');
     await flushPromises();
@@ -180,12 +182,36 @@ describe('Add tab', () => {
     const wrapper = await mountApp();
 
     await wrapper.find('button[aria-label="Add account"]').trigger('click');
+    await wrapper.find('.add-name-field input').setValue('Test account');
     await wrapper.find('textarea[placeholder="Hex, base58, base64, or JSON byte array"]').setValue(TEST_ETH_PRIVATE_KEY);
     await buttonByText(wrapper, 'Import private key').trigger('click');
     await flushPromises();
     await wrapper.find('button[aria-label="Add account"]').trigger('click');
 
     expect((wrapper.find('textarea[placeholder="Hex, base58, base64, or JSON byte array"]').element as HTMLTextAreaElement).value).toBe('');
+    wrapper.unmount();
+  });
+
+  it('disables create and import actions until an account name is provided', async () => {
+    setupWalletRpc({ exists: true, unlocked: true });
+    const wrapper = await mountApp();
+
+    await wrapper.find('button[aria-label="Add account"]').trigger('click');
+    await wrapper.find('textarea[placeholder="BIP-39 mnemonic"]').setValue(TEST_MNEMONIC);
+    await wrapper.find('textarea[placeholder="Hex, base58, base64, or JSON byte array"]').setValue(TEST_ETH_PRIVATE_KEY);
+
+    expect(wrapper.text()).toContain('Account name is required');
+    expect(buttonByText(wrapper, 'Create account').attributes('disabled')).toBeDefined();
+    expect(buttonByText(wrapper, 'Import').attributes('disabled')).toBeDefined();
+    expect(buttonByText(wrapper, 'Import private key').attributes('disabled')).toBeDefined();
+
+    await wrapper.find('.add-name-field input').setValue('Test account');
+
+    expect(wrapper.text()).not.toContain('Account name is required');
+    expect(buttonByText(wrapper, 'Create account').attributes('disabled')).toBeUndefined();
+    expect(buttonByText(wrapper, 'Import').attributes('disabled')).toBeUndefined();
+    expect(buttonByText(wrapper, 'Import private key').attributes('disabled')).toBeUndefined();
+
     wrapper.unmount();
   });
 });

@@ -37,6 +37,7 @@ const emit = defineEmits<{
         </span>
         <input
           v-model="settingsForm.requirePasswordForTransfers"
+          class="switch"
           :disabled="busy"
           type="checkbox"
           @change="emit('updateSetting', 'requirePasswordForTransfers')"
@@ -49,6 +50,7 @@ const emit = defineEmits<{
         </span>
         <input
           v-model="settingsForm.requirePasswordForMessageSigning"
+          class="switch"
           :disabled="busy"
           type="checkbox"
           @change="emit('updateSetting', 'requirePasswordForMessageSigning')"
@@ -61,6 +63,7 @@ const emit = defineEmits<{
         </span>
         <input
           v-model="settingsForm.requirePasswordForTransactionSigning"
+          class="switch"
           :disabled="busy"
           type="checkbox"
           @change="emit('updateSetting', 'requirePasswordForTransactionSigning')"
@@ -73,6 +76,7 @@ const emit = defineEmits<{
         </span>
         <input
           v-model="settingsForm.enableDevelopmentNetworks"
+          class="switch"
           :disabled="busy"
           type="checkbox"
           @change="emit('updateSetting', 'enableDevelopmentNetworks')"

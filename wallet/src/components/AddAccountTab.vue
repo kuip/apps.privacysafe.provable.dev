@@ -24,6 +24,8 @@ const selectedSeedGroup = computed({
   get: () => props.selectedSeedGroupId,
   set: value => emit('update:selectedSeedGroupId', value),
 });
+
+const accountNameMissing = computed(() => props.addForm.accountName.length === 0);
 </script>
 
 <template>
@@ -33,14 +35,12 @@ const selectedSeedGroup = computed({
         <span>Account name</span>
         <input v-model.trim="addForm.accountName" autocomplete="off" />
       </label>
+      <p v-if="accountNameMissing" class="field-error">Account name is required.</p>
     </div>
     <div class="add-sections">
-      <article class="add-section">
+      <article class="panel add-section">
         <div class="panel__header">
           <h2>Generate New Account</h2>
-          <button class="btn btn--primary" :disabled="busy" @click="emit('create')">
-            Create account
-          </button>
         </div>
         <select v-if="state.seedGroups.length" v-model="selectedSeedGroup" aria-label="Base wallet">
           <option value="">New wallet</option>
@@ -48,6 +48,9 @@ const selectedSeedGroup = computed({
             New derived account from {{ group.name }} (index {{ group.nextAccountIndex }})
           </option>
         </select>
+        <button class="btn btn--primary" :disabled="busy || accountNameMissing" @click="emit('create')">
+          Create account
+        </button>
         <div v-if="generatedMnemonic" class="recovery-box">
           <span>Recovery phrase for the new wallet</span>
           <code>{{ generatedMnemonic }}</code>
@@ -57,7 +60,7 @@ const selectedSeedGroup = computed({
         </div>
       </article>
 
-      <article class="add-section">
+      <article class="panel add-section">
         <div class="panel__header">
           <h2>Import Recovery Phrase</h2>
         </div>
@@ -69,14 +72,14 @@ const selectedSeedGroup = computed({
         />
         <button
           class="btn btn--primary"
-          :disabled="busy || !mnemonicForm.mnemonic"
+          :disabled="busy || !mnemonicForm.mnemonic || accountNameMissing"
           @click="emit('importMnemonic')"
         >
           Import
         </button>
       </article>
 
-      <article class="add-section">
+      <article class="panel add-section">
         <div class="panel__header">
           <h2>Import Private Key</h2>
         </div>
@@ -92,7 +95,7 @@ const selectedSeedGroup = computed({
         />
         <button
           class="btn btn--primary"
-          :disabled="busy || !privateKeyForm.privateKey"
+          :disabled="busy || !privateKeyForm.privateKey || accountNameMissing"
           @click="emit('importPrivateKey')"
         >
           Import private key
