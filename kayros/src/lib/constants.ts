@@ -1,6 +1,7 @@
 export const KAYROS_SERVICE_NAME = 'KayrosNotary';
 export const SETTINGS_FILE = 'settings.json';
 export const PROOFS_ROOT_FOLDER = 'kayros';
+export const PROOFS_INDEX_FILE = 'proof-index.json';
 
 export const DEFAULT_SETTINGS = {
   kayrosHost: 'https://kayros.provable.dev',

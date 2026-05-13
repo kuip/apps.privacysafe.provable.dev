@@ -1,17 +1,20 @@
 // @ts-nocheck
 
-import { DEFAULT_SETTINGS, KAYROS_SERVICE_NAME, PROOFS_ROOT_FOLDER, SETTINGS_FILE } from "../src/lib/constants.ts";
+import { DEFAULT_SETTINGS, KAYROS_SERVICE_NAME, PROOFS_INDEX_FILE, PROOFS_ROOT_FOLDER, SETTINGS_FILE } from "../src/lib/constants.ts";
 
 declare const w3n: any;
 
 const SHA256_ALGORITHM = "SHA-256";
 const KAYROS_REGISTER_RETRIES = 3;
 const KAYROS_REGISTER_RETRY_DELAY_MS = 200;
+const KAYROS_MERKLE_FETCH_DELAYS_MS = [10_000, 20_000] as const;
+const UUID_GREGORIAN_EPOCH = 122192928000000000n;
 
 const API_ROUTES = {
   PROVE_SINGLE_HASH: "/api/lightnet/grpc/single-hash",
   GET_RECORD_BY_HASH: "/api/lightnet/database/record-by-hash",
   GET_RECORD_BY_DATA_ITEM: "/api/lightnet/database/record",
+  GET_MERKLE_PROOF: "/api/lightnet/merkle-proof",
 } as const;
 
 function logInfo(message: string, details?: unknown): void {
@@ -56,6 +59,11 @@ function decodeJson<T>(datum: { bytes?: Uint8Array } | undefined): T {
   return JSON.parse(new TextDecoder().decode(datum.bytes)) as T;
 }
 
+function decodeJsonObject(data: { bytes?: Uint8Array } | undefined): Record<string, unknown> {
+  const decoded = decodeJson<Record<string, unknown> | null | undefined>(data);
+  return (decoded && typeof decoded === "object") ? decoded : {};
+}
+
 function stableSerialize(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableSerialize).join(",")}]`;
@@ -77,6 +85,19 @@ function bytesToHex(bytes: Uint8Array): string {
     .join("");
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  const normalized = hex.trim().toLowerCase();
+  if (!/^[0-9a-f]+$/.test(normalized) || normalized.length % 2 !== 0) {
+    return new Uint8Array(0);
+  }
+
+  const bytes = new Uint8Array(normalized.length / 2);
+  for (let i = 0; i < normalized.length; i += 2) {
+    bytes[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16);
+  }
+  return bytes;
+}
+
 async function createSha256Hex(bytes: Uint8Array): Promise<string> {
   const input = bytes.slice().buffer as ArrayBuffer;
   const digest = await crypto.subtle.digest("SHA-256", input);
@@ -87,6 +108,68 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => {
     setTimeout(resolve, ms);
   });
+}
+
+function scheduleAfter(ms: number, fn: () => void): void {
+  setTimeout(fn, ms);
+}
+
+function timeuuidToTimestamp(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  const normalized = value.replace(/-/g, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(normalized)) {
+    return undefined;
+  }
+
+  const bytes = hexToBytes(normalized);
+  if (bytes.length !== 16) {
+    return undefined;
+  }
+
+  const timeLow = (BigInt(bytes[0]) << 24n)
+    | (BigInt(bytes[1]) << 16n)
+    | (BigInt(bytes[2]) << 8n)
+    | BigInt(bytes[3]);
+  const timeMid = (BigInt(bytes[4]) << 8n) | BigInt(bytes[5]);
+  const timeHi = ((BigInt(bytes[6]) << 8n) | BigInt(bytes[7])) & 0x0fffn;
+  const timestamp = timeLow | (timeMid << 32n) | (timeHi << 48n);
+  const unixNanos = (timestamp - UUID_GREGORIAN_EPOCH) * 100n;
+  const unixMillis = Number(unixNanos / 1_000_000n);
+
+  if (!Number.isFinite(unixMillis)) {
+    return undefined;
+  }
+
+  return new Date(unixMillis).toISOString();
+}
+
+function resolveProofCreatedAt(proof: any): string | undefined {
+  const uploadedAt = proof?.uploadedAt || proof?.metadataPayload?.uploadedAt;
+  if (typeof uploadedAt === "string" && uploadedAt.trim()) {
+    return uploadedAt;
+  }
+
+  return timeuuidToTimestamp(
+    proof?.content?.response?.timeuuid
+    || proof?.metadata?.response?.timeuuid,
+  );
+}
+
+function resolveArchiveCreatedAt(request: any, proof: any): string {
+  const fromRequest = request?.metadataPayload?.uploadedAt;
+  if (typeof fromRequest === "string" && fromRequest.trim()) {
+    return fromRequest;
+  }
+
+  const fromProof = resolveProofCreatedAt(proof);
+  if (typeof fromProof === "string" && fromProof.trim()) {
+    return fromProof;
+  }
+
+  return new Date().toISOString();
 }
 
 function normalizeSettings(input?: Record<string, unknown> | null) {
@@ -115,6 +198,15 @@ async function writeSettings(settings: Record<string, unknown>) {
   const fs = await w3n.storage.getAppLocalFS();
   await fs.writeJSONFile(SETTINGS_FILE, normalized);
   return normalized;
+}
+
+async function deleteSettingsFile() {
+  const fs = await w3n.storage.getAppLocalFS();
+  try {
+    await fs.deleteFile(SETTINGS_FILE);
+  } catch {
+    // ignore missing settings file
+  }
 }
 
 function mergeSettings(base: ReturnType<typeof normalizeSettings>, overrides?: Record<string, unknown>) {
@@ -154,6 +246,97 @@ async function getProofsRootFS() {
   return await fs.writableSubRoot(PROOFS_ROOT_FOLDER);
 }
 
+type ProofIndexEntry = {
+  dataType: string;
+  contentHash: string;
+  createdAt?: string;
+  hasProof: boolean;
+  hasMerkleProof: boolean;
+  hasMeta: boolean;
+};
+
+async function readProofIndex(): Promise<ProofIndexEntry[]> {
+  const proofsFs = await getProofsRootFS();
+  try {
+    const raw = await proofsFs.readJSONFile(PROOFS_INDEX_FILE);
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeProofIndex(entries: ProofIndexEntry[]): Promise<void> {
+  const proofsFs = await getProofsRootFS();
+  await proofsFs.writeJSONFile(PROOFS_INDEX_FILE, entries);
+}
+
+function upsertProofIndexEntry(
+  entries: ProofIndexEntry[],
+  nextEntry: ProofIndexEntry,
+): ProofIndexEntry[] {
+  const index = entries.findIndex(entry => (
+    entry.dataType === nextEntry.dataType
+    && entry.contentHash === nextEntry.contentHash
+  ));
+  if (index >= 0) {
+    const merged = { ...entries[index], ...nextEntry };
+    entries.splice(index, 1, merged);
+    return entries;
+  }
+
+  entries.push(nextEntry);
+  return entries;
+}
+
+function removeProofIndexEntry(
+  entries: ProofIndexEntry[],
+  dataType: string,
+  contentHash: string,
+): ProofIndexEntry[] {
+  return entries.filter(entry => !(
+    entry.dataType === dataType
+    && entry.contentHash === contentHash
+  ));
+}
+
+async function clearFolderContents(fs: any, path = ""): Promise<void> {
+  const entries = await listFolderIfPresent(fs, path);
+  for (const entry of entries) {
+    if (!entry?.name) {
+      continue;
+    }
+
+    const entryPath = path ? `${path}/${entry.name}` : entry.name;
+    if (entry.isFolder) {
+      await clearFolderContents(fs, entryPath);
+      await fs.deleteFolder(entryPath);
+    } else {
+      await fs.deleteFile(entryPath);
+    }
+  }
+}
+
+async function deleteProofsRoot() {
+  const proofsFs = await getProofsRootFS();
+  const entries = await readProofIndex();
+
+  for (const entry of entries) {
+    const archivePaths = buildProofArchivePaths(entry.dataType, entry.contentHash);
+    if (entry.hasProof) {
+      await proofsFs.deleteFile(archivePaths.proofPath).catch(() => {});
+    }
+    if (entry.hasMeta) {
+      await proofsFs.deleteFile(archivePaths.metaPath).catch(() => {});
+    }
+    if (entry.hasMerkleProof) {
+      await proofsFs.deleteFile(archivePaths.merkleProofPath).catch(() => {});
+    }
+  }
+
+  await proofsFs.deleteFile(PROOFS_INDEX_FILE).catch(() => {});
+  logInfo("Cleared Kayros archived proofs root");
+}
+
 async function readJSONIfPresent(fs: any, path: string) {
   try {
     return await fs.readJSONFile(path);
@@ -175,7 +358,7 @@ async function storeArchivedProofBundle(
   contentHash: string,
   proof: any,
   meta: any,
-  saveMerkleProofs: boolean,
+  merkleProof: any | undefined,
 ) {
   const rootFs = await getProofsRootFS();
   const archivePaths = buildProofArchivePaths(dataType, contentHash);
@@ -184,9 +367,39 @@ async function storeArchivedProofBundle(
   await folderFs.writeJSONFile(archivePaths.proofFileName, proof);
   await folderFs.writeJSONFile(archivePaths.metaFileName, meta);
 
-  if (saveMerkleProofs && proof.merkleProof !== undefined) {
-    await folderFs.writeJSONFile(archivePaths.merkleProofFileName, proof.merkleProof);
+  if (merkleProof !== undefined) {
+    await folderFs.writeJSONFile(archivePaths.merkleProofFileName, merkleProof);
   }
+
+  const indexEntries = await readProofIndex();
+  await writeProofIndex(upsertProofIndexEntry(indexEntries, {
+    dataType,
+    contentHash,
+    createdAt: meta?.createdAt,
+    hasProof: true,
+    hasMerkleProof: merkleProof !== undefined,
+    hasMeta: true,
+  }));
+}
+
+async function storeArchivedMerkleProof(
+  dataType: string,
+  contentHash: string,
+  merkleProof: any,
+) {
+  const rootFs = await getProofsRootFS();
+  const archivePaths = buildProofArchivePaths(dataType, contentHash);
+  const folderFs = await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+  await folderFs.writeJSONFile(archivePaths.merkleProofFileName, merkleProof);
+
+  const indexEntries = await readProofIndex();
+  await writeProofIndex(upsertProofIndexEntry(indexEntries, {
+    dataType,
+    contentHash,
+    hasProof: true,
+    hasMerkleProof: true,
+    hasMeta: true,
+  }));
 }
 
 async function loadArchivedProofBundle(dataType: string, contentHash: string) {
@@ -335,6 +548,25 @@ async function getRecordByDataItem(
   return await response.json();
 }
 
+async function getMerkleProof(
+  host: string,
+  dataType: string,
+  hashItem: string,
+  userKey?: string,
+) {
+  const route = `${API_ROUTES.GET_MERKLE_PROOF}?data_type=${encodeURIComponent(dataType)}&hash=${encodeURIComponent(hashItem)}`;
+  const response = await fetch(getKayrosUrl(host, route), {
+    method: "GET",
+    headers: getDefaultHeaders(userKey),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Kayros API error: ${response.status} ${response.statusText}`);
+  }
+
+  return await response.json();
+}
+
 function ensureKayrosRegistrationSucceeded(result: any) {
   if (result.response.success && !result.response.error) {
     return result;
@@ -363,6 +595,14 @@ function buildFailedEntry(label: "content" | "metadata", hash: string, err: unkn
     hash,
     error: formatError(err),
   };
+}
+
+function ensureMerkleProofSucceeded(result: any) {
+  if (result?.success && !result?.error) {
+    return result;
+  }
+
+  throw new Error(result?.error || result?.message || "Kayros rejected the merkle proof request.");
 }
 
 function resolveOverallStatus(content: any, metadata: any) {
@@ -399,6 +639,15 @@ class KayrosService {
 
   async saveSettings(settings: Record<string, unknown>) {
     return await writeSettings(settings);
+  }
+
+  async deleteKayrosData() {
+    await Promise.all([
+      deleteSettingsFile(),
+      deleteProofsRoot(),
+    ]);
+
+    return { deleted: true };
   }
 
   private async registerHashOnce(request: Record<string, unknown>) {
@@ -492,6 +741,89 @@ class KayrosService {
     };
   }
 
+  private async fetchMerkleProofsForProof(proof: any, userKey?: string) {
+    const contentRequest = proof.content?.request;
+    const metadataRequest = proof.metadata?.request;
+    const contentHashItem = proof.content?.response?.hash;
+    const metadataHashItem = proof.metadata?.response?.hash;
+
+    if (!contentRequest?.kayrosHost || !contentRequest?.dataType || !contentHashItem) {
+      throw new Error("Missing content registration data needed to fetch Merkle proof.");
+    }
+
+    if (!metadataRequest?.kayrosHost || !metadataRequest?.dataType || !metadataHashItem) {
+      throw new Error("Missing metadata registration data needed to fetch Merkle proof.");
+    }
+
+    const [contentMerkle, metadataMerkle] = await Promise.all([
+      getMerkleProof(
+        contentRequest.kayrosHost,
+        contentRequest.dataType,
+        contentHashItem,
+        userKey,
+      ).then(ensureMerkleProofSucceeded),
+      getMerkleProof(
+        metadataRequest.kayrosHost,
+        metadataRequest.dataType,
+        metadataHashItem,
+        userKey,
+      ).then(ensureMerkleProofSucceeded),
+    ]);
+
+    return {
+      version: 1,
+      content: contentMerkle,
+      metadata: metadataMerkle,
+    };
+  }
+
+  private scheduleMerkleProofPersistence(
+    proof: any,
+    contentHash: string,
+    dataType: string,
+    fullFilePath: string,
+    userKey?: string,
+  ) {
+    let accumulatedDelay = 0;
+    let completed = false;
+
+    for (const [index, delayMs] of KAYROS_MERKLE_FETCH_DELAYS_MS.entries()) {
+      accumulatedDelay += delayMs;
+      const attempt = index + 1;
+      const scheduledDelay = accumulatedDelay;
+
+      scheduleAfter(scheduledDelay, () => {
+        void (async () => {
+          if (completed) {
+            return;
+          }
+
+          try {
+            const merkleProof = await this.fetchMerkleProofsForProof(proof, userKey);
+            await storeArchivedMerkleProof(dataType, contentHash, merkleProof);
+            completed = true;
+            logInfo("Stored Kayros delayed Merkle proof bundle", {
+              attempt,
+              dataType,
+              contentHash,
+              fullFilePath,
+            });
+          } catch (err) {
+            const detail = {
+              attempt,
+              delayMs: scheduledDelay,
+              file: fullFilePath.split("/").pop() || "",
+              fullFilePath,
+              error: formatError(err),
+            };
+            console.warn("Failed to fetch delayed Kayros Merkle proof after registration.", detail);
+            await w3n?.log?.("error", "Failed to fetch delayed Kayros Merkle proof after registration.", detail);
+          }
+        })();
+      });
+    }
+  }
+
   async getProofFile(request: Record<string, unknown>) {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
@@ -516,63 +848,66 @@ class KayrosService {
     return bundle.meta;
   }
 
-  async listProofs(request: Record<string, unknown>) {
+  async saveMerkleProofFile(request: Record<string, unknown>) {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
-    const rootFs = await getProofsRootFS();
-    const { dataTypeFolder } = buildProofArchivePaths(resolved.dataType, "placeholder");
-    const entries = await listFolderIfPresent(rootFs, dataTypeFolder);
-    const proofsByHash = new Map<string, {
-      dataType: string;
-      contentHash: string;
-      hasProof: boolean;
-      hasMerkleProof: boolean;
-      hasMeta: boolean;
-      meta?: unknown;
-    }>();
-
-    for (const entry of entries) {
-      if (!entry?.name || entry.isFolder) {
-        continue;
-      }
-
-      const match = entry.name.match(/^(.+?)_(proof|meta|merkle-proof)\.json$/);
-      if (!match) {
-        continue;
-      }
-
-      const [, contentHash, kind] = match;
-      const existing = proofsByHash.get(contentHash) || {
-        dataType: resolved.dataType,
-        contentHash,
-        hasProof: false,
-        hasMerkleProof: false,
-        hasMeta: false,
-      };
-
-      if (kind === "proof") {
-        existing.hasProof = true;
-      } else if (kind === "merkle-proof") {
-        existing.hasMerkleProof = true;
-      } else if (kind === "meta") {
-        existing.hasMeta = true;
-        existing.meta = await readJSONIfPresent(rootFs, `${dataTypeFolder}/${entry.name}`);
-      }
-
-      proofsByHash.set(contentHash, existing);
+    const contentHash = String(request.contentHash ?? "").trim();
+    if (!contentHash) {
+      throw new Error("Missing contentHash for saveMerkleProofFile.");
     }
+    if (!("merkleProof" in request)) {
+      throw new Error("Missing merkleProof payload for saveMerkleProofFile.");
+    }
+
+    await storeArchivedMerkleProof(
+      resolved.dataType,
+      contentHash,
+      request.merkleProof,
+    );
 
     return {
       dataType: resolved.dataType,
-      entries: Array.from(proofsByHash.values()).sort((left, right) => {
-        const leftName = String(left.meta?.originalFilename ?? left.contentHash);
-        const rightName = String(right.meta?.originalFilename ?? right.contentHash);
-        return leftName.localeCompare(rightName);
-      }),
+      contentHash,
+      saved: true,
     };
   }
 
-  async notarizeStoredFile(request: any, file: any, fs: any) {
+  async listProofs(request: Record<string, unknown>) {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const indexedEntries = await readProofIndex();
+    const filteredEntries = (
+      typeof request.dataType === "string" && request.dataType.trim()
+        ? indexedEntries.filter(entry => entry.dataType === resolved.dataType)
+        : indexedEntries
+    );
+
+    const response = {
+      dataType: typeof request.dataType === "string" && request.dataType.trim()
+        ? resolved.dataType
+        : "",
+      entries: filteredEntries.sort((left, right) => {
+        const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NEGATIVE_INFINITY;
+        const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NEGATIVE_INFINITY;
+        if (leftTime !== rightTime) {
+          return rightTime - leftTime;
+        }
+        if (left.dataType !== right.dataType) {
+          return left.dataType.localeCompare(right.dataType);
+        }
+        return left.contentHash.localeCompare(right.contentHash);
+      }),
+    };
+
+    logInfo("Listed Kayros archived proofs", {
+      requestedDataType: response.dataType || null,
+      count: response.entries.length,
+    });
+
+    return response;
+  }
+
+  async notarizeStoredFile(request: any, file: any) {
     const stored = await readSettings();
     const fileBytes = await file.readBytes();
     if (!fileBytes) {
@@ -597,10 +932,15 @@ class KayrosService {
       ? buildSuccessEntry("metadata", metadataHash, metadataResult.value)
       : buildFailedEntry("metadata", metadataHash, metadataResult.reason);
 
+    const archivedAt = resolveArchiveCreatedAt(request, {
+      content: contentResult.status === "fulfilled" ? contentResult.value : undefined,
+      metadata: metadataResult.status === "fulfilled" ? metadataResult.value : undefined,
+    });
+
     const proof = {
       version: 1,
       status: resolveOverallStatus(content, metadata),
-      uploadedAt: request.metadataPayload.uploadedAt,
+      uploadedAt: archivedAt,
       metadataPayload: request.metadataPayload,
       content,
       metadata,
@@ -625,18 +965,48 @@ class KayrosService {
     });
 
     const archivedDataType = proof.content.request?.dataType || proof.metadata.request?.dataType || stored.dataType;
+    try {
+      await storeArchivedProofBundle(
+        archivedDataType,
+        proof.content.hash,
+        proof,
+        {
+          createdAt: archivedAt,
+          currentFilePath: request.fullFilePath,
+          fsId: typeof request.fsId === "string" ? request.fsId : null,
+          originalFilename: request.metadataPayload.originalName,
+        },
+        undefined,
+      );
+      logInfo("Stored Kayros archived proof bundle", {
+        dataType: archivedDataType,
+        contentHash: proof.content.hash,
+        fullFilePath: request.fullFilePath,
+        hasMerkleProof: false,
+      });
+    } catch (err) {
+      const detail = {
+        file: file.name,
+        fullFilePath: request.fullFilePath,
+        error: formatError(err),
+      };
+      console.warn("Failed to store Kayros archived proof bundle.", detail);
+      await w3n?.log?.("error", "Failed to store Kayros archived proof bundle.", detail);
+      return {
+        status: proof.status,
+        proofWritten: false,
+      };
+    }
 
-    await storeArchivedProofBundle(
-      archivedDataType,
-      proof.content.hash,
-      proof,
-      {
-        currentFilePath: request.fullFilePath,
-        fsId: typeof request.fsId === "string" ? request.fsId : null,
-        originalFilename: request.metadataPayload.originalName,
-      },
-      stored.saveMerkleProofs,
-    );
+    if (stored.saveMerkleProofs) {
+      this.scheduleMerkleProofPersistence(
+        proof,
+        proof.content.hash,
+        archivedDataType,
+        request.fullFilePath,
+        stored.userKey,
+      );
+    }
 
     return {
       status: proof.status,
@@ -663,7 +1033,16 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.saveSettings(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.saveSettings(decodeJsonObject(data))),
+      });
+      return;
+    }
+
+    if (method === "deleteKayrosData") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.deleteKayrosData()),
       });
       return;
     }
@@ -672,26 +1051,22 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.registerHash(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.registerHash(decodeJsonObject(data))),
       });
       return;
     }
 
     if (method === "notarizeStoredFile") {
-      const request = decodeJson<Record<string, unknown>>(data);
+      const request = decodeJsonObject(data);
       const file = data?.passedByReference?.[0];
-      const fs = data?.passedByReference?.[1];
-      if (!file || !fs) {
-        throw new Error("Kayros notarizeStoredFile requires passed file and fs references.");
+      if (!file) {
+        throw new Error("Kayros notarizeStoredFile requires a passed file reference.");
       }
-      const result = await service.notarizeStoredFile(request, file, fs);
+      const result = await service.notarizeStoredFile(request, file);
       await connection.send({
         callNum,
         callStatus: "end",
-        data: {
-          ...encodeJson(result),
-          passedByReference: [file],
-        },
+        data: encodeJson(result),
       });
       return;
     }
@@ -700,7 +1075,7 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.lookupRecord(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.lookupRecord(decodeJsonObject(data))),
       });
       return;
     }
@@ -709,7 +1084,7 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.lookupDataItem(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.lookupDataItem(decodeJsonObject(data))),
       });
       return;
     }
@@ -718,7 +1093,7 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.getProofFile(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.getProofFile(decodeJsonObject(data))),
       });
       return;
     }
@@ -727,7 +1102,7 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.getMerkleProofFile(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.getMerkleProofFile(decodeJsonObject(data))),
       });
       return;
     }
@@ -736,7 +1111,16 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.getProofMeta(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.getProofMeta(decodeJsonObject(data))),
+      });
+      return;
+    }
+
+    if (method === "saveMerkleProofFile") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.saveMerkleProofFile(decodeJsonObject(data))),
       });
       return;
     }
@@ -745,7 +1129,7 @@ async function handleCall(connection: any, call: any): Promise<void> {
       await connection.send({
         callNum,
         callStatus: "end",
-        data: encodeJson(await service.listProofs(decodeJson<Record<string, unknown>>(data))),
+        data: encodeJson(await service.listProofs(decodeJsonObject(data))),
       });
       return;
     }

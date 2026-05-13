@@ -12,7 +12,7 @@
     "serve": "vite preview"
   },
   "dependencies": {
-    "@kuip/provable-sdk": "^0.0.9",
+    "@kuip/provable-sdk": "^0.1.1",
     "@v1nt1248/3nclient-lib": "^0.2.64",
     "vue": "3.5.24"
   },

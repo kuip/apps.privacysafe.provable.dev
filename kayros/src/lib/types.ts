@@ -89,6 +89,7 @@ export type NotarizeStoredFileResult = {
 };
 
 export interface KayrosProofMeta {
+  createdAt?: string;
   currentFilePath: string;
   fsId?: string | null;
   originalFilename: string;
@@ -107,9 +108,20 @@ export interface ArchivedProofBundle {
   meta?: KayrosProofMeta;
 }
 
+export interface SaveMerkleProofFileRequest extends ArchivedProofFileRequest {
+  merkleProof: unknown;
+}
+
+export interface SaveMerkleProofFileResult {
+  dataType: string;
+  contentHash: string;
+  saved: true;
+}
+
 export interface ArchivedProofListEntry {
   dataType: string;
   contentHash: string;
+  createdAt?: string;
   hasProof: boolean;
   hasMerkleProof: boolean;
   hasMeta: boolean;
