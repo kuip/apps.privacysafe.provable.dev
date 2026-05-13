@@ -88,6 +88,8 @@ const historyPageSize = ref(10);
 const historyPageSizeOptions = [10, 50, 100] as const;
 const copyFallbackText = ref('');
 const copyFallbackField = ref<HTMLTextAreaElement | null>(null);
+const successMessage = ref('');
+let successMessageTimer: number | undefined;
 
 const vaultForm = reactive({
   passphrase: '',
@@ -286,9 +288,20 @@ const transferNeedsPassword = computed(() => state.value.settings.requirePasswor
 const signMessageNeedsPassword = computed(() => state.value.settings.requirePasswordForMessageSigning);
 const canRevealBackupPhrase = computed(() => selectedAccount.value?.secretKind === 'mnemonic');
 
-function setResult(_text: string): void {
+function setResult(text: string): void {
   errorMessage.value = '';
   errorDetails.value = '';
+  if (successMessageTimer !== undefined) {
+    window.clearTimeout(successMessageTimer);
+    successMessageTimer = undefined;
+  }
+  successMessage.value = text;
+  if (text) {
+    successMessageTimer = window.setTimeout(() => {
+      successMessage.value = '';
+      successMessageTimer = undefined;
+    }, 3500);
+  }
 }
 
 function stableDetails(err: unknown): string {
@@ -1193,6 +1206,9 @@ onUnmounted(() => {
   if (balanceRefreshTimer !== undefined) {
     window.clearInterval(balanceRefreshTimer);
   }
+  if (successMessageTimer !== undefined) {
+    window.clearTimeout(successMessageTimer);
+  }
   stopPendingTransferPoll();
 });
 </script>
@@ -1341,5 +1357,12 @@ onUnmounted(() => {
         @copy="copy"
       />
     </template>
+
+    <div v-if="successMessage" class="toast" role="status" aria-live="polite">
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path d="m5 12 5 5L20 7" />
+      </svg>
+      <span>{{ successMessage }}</span>
+    </div>
   </main>
 </template>
