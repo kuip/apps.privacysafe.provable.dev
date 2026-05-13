@@ -1,8 +1,49 @@
+@font-face {
+  font-family: Manrope;
+  src: url("./assets/fonts/Manrope-Light.woff2") format("woff2");
+  font-weight: 300;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: Manrope;
+  src: url("./assets/fonts/Manrope-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: Manrope;
+  src: url("./assets/fonts/Manrope-SemiBold.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: Manrope;
+  src: url("./assets/fonts/Manrope-Bold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+}
+
 :root {
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --wallet-radius-control: 8px;
-  --wallet-radius-surface: 10px;
-  --wallet-scrollbar-gap: 10px;
+  font-family: system-ui, Manrope, sans-serif;
+  --wallet-radius-control: var(--spacing-xs, 4px);
+  --wallet-radius-surface: var(--spacing-s, 8px);
+  --wallet-radius-dialog: var(--spacing-m, 16px);
+  --wallet-scrollbar-gap: var(--spacing-s, 8px);
+  --wallet-focus-ring: var(--s-default-outline-focused, #6ea8fe);
+  --wallet-font-11: var(--font-11, 11px);
+  --wallet-font-12: var(--font-12, 12px);
+  --wallet-font-13: var(--font-13, 13px);
+  --wallet-font-14: var(--font-14, 14px);
+  --wallet-font-16: var(--font-16, 16px);
+  --wallet-font-20: var(--font-20, 20px);
+  --wallet-line-14: var(--font-14, 14px);
+  --wallet-line-16: var(--font-16, 16px);
+  --wallet-line-18: var(--font-18, 18px);
+  --wallet-line-20: var(--font-20, 20px);
+  --wallet-line-24: var(--font-24, 24px);
 }
 
 * {
@@ -18,7 +59,7 @@ body,
 body {
   margin: 0;
   background-color: var(--color-bg-block-primary-default, #f5f7fa);
-  color: var(--color-text-control-primary-default, #172033);
+  color: var(--color-text-block-primary-default, #172033);
 }
 
 button,
@@ -67,9 +108,12 @@ textarea {
   gap: var(--spacing-m, 16px);
   padding: var(--spacing-ml, 24px);
   border: 1px solid var(--color-border-block-primary-default, #d7dee7);
-  border-radius: var(--wallet-radius-surface);
+  border-radius: var(--wallet-radius-dialog);
   background-color: var(--color-bg-block-primary-default, #ffffff);
-  box-shadow: 0 18px 48px rgb(15 23 42 / 16%);
+  box-shadow:
+    0 3px 3px -2px rgb(0 0 0 / 20%),
+    0 3px 4px 0 rgb(0 0 0 / 14%),
+    0 1px 8px 0 rgb(0 0 0 / 12%);
 }
 
 .vault-logo {
@@ -85,8 +129,8 @@ textarea {
 .field-error,
 .panel-note {
   margin: 0;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-20);
 }
 
 .panel-note {
@@ -132,21 +176,21 @@ p {
 }
 
 h1 {
-  font-size: 30px;
-  line-height: 36px;
-  font-weight: 700;
+  font-size: var(--wallet-font-20);
+  line-height: var(--wallet-line-24);
+  font-weight: 600;
 }
 
 h2 {
-  font-size: 18px;
-  line-height: 26px;
-  font-weight: 650;
+  font-size: var(--wallet-font-16);
+  line-height: var(--wallet-line-20);
+  font-weight: 600;
 }
 
 h3 {
-  font-size: 15px;
-  line-height: 22px;
-  font-weight: 650;
+  font-size: var(--wallet-font-14);
+  line-height: var(--wallet-line-20);
+  font-weight: 600;
 }
 
 .brand p,
@@ -161,8 +205,8 @@ small {
 .empty,
 .address-line {
   margin-top: 4px;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-20);
   overflow-wrap: anywhere;
 }
 
@@ -194,7 +238,7 @@ small {
 .subpanel {
   align-content: start;
   padding: var(--spacing-m, 16px);
-  background-color: color-mix(in srgb, var(--color-bg-block-primary-default, #ffffff) 94%, var(--color-bg-control-accent-default, #2f6fed));
+  background-color: var(--color-bg-control-secondary-default, #f7f9fc);
 }
 
 .panel__header {
@@ -222,15 +266,15 @@ small {
   display: grid;
   gap: var(--spacing-s, 8px);
   padding: var(--spacing-s, 8px);
-  border: 1px solid var(--color-border-control-accent-default, #2f6fed);
+  border: 1px solid var(--color-border-control-primary-default, #d7dee7);
   border-radius: var(--wallet-radius-control);
-  background-color: color-mix(in srgb, var(--color-bg-control-accent-default, #2f6fed) 8%, var(--color-bg-block-primary-default, #ffffff));
+  background-color: var(--color-bg-control-secondary-default, #f7f9fc);
 }
 
 .recovery-box span {
   color: var(--color-text-control-secondary-default, #64748b);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--wallet-font-12);
+  font-weight: 600;
 }
 
 .recovery-box code {
@@ -252,8 +296,9 @@ label {
 }
 
 label span {
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--wallet-font-12);
+  line-height: var(--wallet-line-16);
+  font-weight: 500;
 }
 
 input,
@@ -261,32 +306,34 @@ select,
 textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--color-border-block-primary-default, #d7dee7);
+  border: 1px solid var(--color-border-control-primary-default, #d7dee7);
   border-radius: var(--wallet-radius-control);
-  background-color: var(--color-bg-block-primary-default, #ffffff);
+  background-color: var(--color-bg-control-primary-default, #ffffff);
   color: var(--color-text-control-primary-default, #172033);
 }
 
 input,
 select {
-  min-height: 36px;
-  padding: 0 10px;
+  min-height: var(--spacing-l, 40px);
+  padding: 0 var(--spacing-s, 8px);
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-18);
 }
 
 textarea {
-  padding: 10px;
+  padding: var(--spacing-s, 8px);
   resize: vertical;
   line-height: 1.45;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: var(--color-border-control-accent-default, #2f6fed);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-border-control-accent-default, #2f6fed) 18%, transparent);
+  border-color: var(--wallet-focus-ring);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wallet-focus-ring) 32%, transparent);
 }
 
 .btn,
@@ -300,29 +347,30 @@ textarea:focus {
 }
 
 .btn {
-  min-height: 36px;
+  min-height: var(--spacing-l, 40px);
   padding: 0 var(--spacing-m, 16px);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-18);
+  font-weight: 500;
 }
 
 .btn--primary {
-  background-color: var(--color-bg-control-accent-default, #2f6fed);
-  color: var(--color-text-control-primary-contrast, #ffffff);
+  background-color: var(--color-bg-button-primary-default, var(--color-bg-control-accent-default, #2f6fed));
+  color: var(--color-text-button-primary-default, #ffffff);
 }
 
 .btn--secondary,
 .icon-action,
 .lock-toggle,
 .tab-btn {
-  background-color: var(--color-bg-control-secondary-default, #ffffff);
-  border-color: var(--color-border-block-primary-default, #d7dee7);
-  color: var(--color-text-control-primary-default, #172033);
+  background-color: var(--color-bg-button-secondary-default, var(--color-bg-control-secondary-default, #ffffff));
+  border-color: var(--color-border-button-secondary-default, var(--color-border-control-secondary-default, #d7dee7));
+  color: var(--color-text-button-secondary-default, var(--color-text-control-primary-default, #172033));
 }
 
 .btn--danger {
-  background-color: #b91c1c;
-  color: #ffffff;
+  background-color: var(--error-content-default, #b91c1c);
+  color: var(--error-fill-default, #ffffff);
 }
 
 .btn--muted-danger {
@@ -333,7 +381,8 @@ textarea:focus {
 .icon-action:hover:not(:disabled),
 .lock-toggle:hover:not(:disabled),
 .tab-btn:hover:not(:disabled) {
-  border-color: var(--color-border-control-accent-default, #2f6fed);
+  background-color: var(--color-bg-control-primary-hover, #eef3fa);
+  border-color: var(--color-border-control-secondary-hover, var(--wallet-focus-ring));
 }
 
 .btn:disabled,
@@ -344,13 +393,13 @@ textarea:focus {
 }
 
 .icon-action {
-  width: 36px;
-  height: 36px;
+  width: var(--spacing-l, 40px);
+  height: var(--spacing-l, 40px);
   display: grid;
   place-items: center;
   padding: 0;
-  font-size: 17px;
-  font-weight: 800;
+  font-size: var(--wallet-font-16);
+  font-weight: 600;
 }
 
 .lock-toggle {
@@ -381,14 +430,14 @@ textarea:focus {
 }
 
 .tab-btn {
-  min-height: 38px;
+  min-height: var(--spacing-l, 40px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 0 var(--spacing-m, 16px);
-  font-size: 13px;
-  font-weight: 700;
+  font-size: var(--wallet-font-13);
+  font-weight: 500;
 }
 
 .tab-icon {
@@ -404,8 +453,9 @@ textarea:focus {
 }
 
 .tab-btn[data-active='true'] {
-  border-color: var(--color-border-control-accent-default, #2f6fed);
-  background-color: color-mix(in srgb, var(--color-bg-control-accent-default, #2f6fed) 9%, transparent);
+  border-color: var(--color-border-control-accent-default, var(--wallet-focus-ring));
+  background-color: var(--color-bg-control-primary-hover, #eef3fa);
+  color: var(--color-text-control-accent-default, var(--color-text-button-secondary-default, #172033));
 }
 
 .tab-surface {
@@ -414,6 +464,29 @@ textarea:focus {
   padding-right: var(--wallet-scrollbar-gap);
   padding-bottom: var(--spacing-m, 16px);
   scrollbar-gutter: stable;
+}
+
+.tab-surface::-webkit-scrollbar,
+.token-balance-list::-webkit-scrollbar,
+pre::-webkit-scrollbar,
+.approval-raw pre::-webkit-scrollbar {
+  width: 6px;
+  height: 8px;
+}
+
+.tab-surface::-webkit-scrollbar-track,
+.token-balance-list::-webkit-scrollbar-track,
+pre::-webkit-scrollbar-track,
+.approval-raw pre::-webkit-scrollbar-track {
+  background-color: var(--grey-10, transparent);
+}
+
+.tab-surface::-webkit-scrollbar-thumb,
+.token-balance-list::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb,
+.approval-raw pre::-webkit-scrollbar-thumb {
+  background-color: var(--grey-15, #cbd5e1);
+  border-radius: 80px;
 }
 
 .add-surface {
@@ -442,7 +515,7 @@ textarea:focus {
 
 .add-section input,
 .add-section select {
-  height: 36px;
+  height: var(--spacing-l, 40px);
   align-self: start;
 }
 
@@ -465,10 +538,10 @@ textarea:focus {
 
 .account-balance {
   margin-top: var(--spacing-s, 8px);
-  font-size: 24px;
-  line-height: 32px;
-  font-weight: 750;
-  color: var(--color-text-control-primary-default, #172033);
+  font-size: var(--wallet-font-20);
+  line-height: var(--wallet-line-24);
+  font-weight: 600;
+  color: var(--color-text-block-primary-default, #172033);
 }
 
 .token-balances-panel {
@@ -495,7 +568,7 @@ textarea:focus {
   padding: var(--spacing-s, 8px);
   border: 1px solid var(--color-border-block-primary-default, #d7dee7);
   border-radius: var(--wallet-radius-control);
-  background-color: color-mix(in srgb, var(--color-bg-block-primary-default, #ffffff) 94%, var(--color-bg-control-accent-default, #2f6fed));
+  background-color: var(--color-bg-control-secondary-default, #f7f9fc);
 }
 
 .token-mark {
@@ -504,10 +577,10 @@ textarea:focus {
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background-color: #0d1824;
-  color: #d8b45d;
-  font-size: 11px;
-  font-weight: 800;
+  background-color: var(--color-bg-control-accent-default, #0d1824);
+  color: var(--color-text-button-primary-default, #ffffff);
+  font-size: var(--wallet-font-11);
+  font-weight: 600;
 }
 
 .token-meta {
@@ -526,12 +599,12 @@ textarea:focus {
 .token-amount {
   justify-self: end;
   text-align: right;
-  font-size: 14px;
+  font-size: var(--wallet-font-14);
 }
 
 .token-error {
   grid-column: 2 / -1;
-  color: #b91c1c;
+  color: var(--error-content-default, #b91c1c);
   overflow-wrap: anywhere;
 }
 
@@ -551,7 +624,7 @@ textarea:focus {
 }
 
 .danger-panel {
-  border-color: color-mix(in srgb, #b91c1c 45%, var(--color-border-block-primary-default, #d7dee7));
+  border-color: color-mix(in srgb, var(--error-content-default, #b91c1c) 45%, var(--color-border-block-primary-default, #d7dee7));
 }
 
 .delete-warning {
@@ -581,13 +654,13 @@ textarea:focus {
 }
 
 .history-controls select {
-  min-height: 32px;
+  min-height: var(--spacing-ml, 32px);
 }
 
 .history-pages span {
   min-width: 44px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
   color: var(--color-text-control-secondary-default, #64748b);
 }
 
@@ -621,7 +694,7 @@ textarea:focus {
 }
 
 .history-summary:hover {
-  background-color: color-mix(in srgb, var(--color-bg-control-secondary-default, #ffffff) 78%, #e8edf5);
+  background-color: var(--color-bg-control-primary-hover, #eef3fa);
 }
 
 .history-time,
@@ -634,7 +707,7 @@ textarea:focus {
 }
 
 .history-time {
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
   color: var(--color-text-control-secondary-default, #64748b);
 }
 
@@ -648,33 +721,33 @@ textarea:focus {
   width: 18px;
   height: 18px;
   fill: none;
-  stroke: #94a3b8;
+  stroke: var(--color-icon-control-secondary-default, #94a3b8);
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 2.4;
 }
 
 .history-row[data-status='pending'] .history-status svg {
-  fill: #eab308;
-  stroke: #eab308;
+  fill: var(--warning-content-default, #eab308);
+  stroke: var(--warning-content-default, #eab308);
 }
 
 .history-row[data-status='success'] .history-status svg {
-  stroke: #16a34a;
+  stroke: var(--success-content-default, #16a34a);
 }
 
 .history-row[data-status='failed'] .history-status svg {
-  stroke: #dc2626;
+  stroke: var(--error-content-default, #dc2626);
 }
 
 .history-row[data-status='not_included'] .history-status svg {
-  fill: #94a3b8;
-  stroke: #94a3b8;
+  fill: var(--color-icon-control-secondary-default, #94a3b8);
+  stroke: var(--color-icon-control-secondary-default, #94a3b8);
 }
 
 .history-row code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
   color: var(--color-text-control-secondary-default, #64748b);
   overflow-wrap: anywhere;
 }
@@ -700,8 +773,8 @@ textarea:focus {
 }
 
 .history-details dt {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--wallet-font-12);
+  font-weight: 500;
   color: var(--color-text-control-secondary-default, #64748b);
 }
 
@@ -745,7 +818,7 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
   line-height: 18px;
 }
 
@@ -754,9 +827,9 @@ pre {
   border: 0;
   background: transparent;
   cursor: pointer;
-  color: var(--color-bg-control-accent-default, #2f6fed);
+  color: var(--color-text-control-accent-default, var(--color-bg-control-accent-default, #2f6fed));
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
   overflow-wrap: anywhere;
 }
 
@@ -771,7 +844,7 @@ pre {
   display: grid;
   place-items: center;
   padding: var(--spacing-ml, 24px);
-  background-color: rgb(15 23 42 / 38%);
+  background-color: var(--shadow-far, rgb(15 23 42 / 38%));
 }
 
 .password-modal {
@@ -780,9 +853,12 @@ pre {
   gap: var(--spacing-m, 16px);
   padding: var(--spacing-m, 16px);
   border: 1px solid var(--color-border-block-primary-default, #d7dee7);
-  border-radius: var(--wallet-radius-surface);
+  border-radius: var(--wallet-radius-dialog);
   background-color: var(--color-bg-block-primary-default, #ffffff);
-  box-shadow: 0 18px 48px rgb(15 23 42 / 22%);
+  box-shadow:
+    0 3px 3px -2px rgb(0 0 0 / 20%),
+    0 3px 4px 0 rgb(0 0 0 / 14%),
+    0 1px 8px 0 rgb(0 0 0 / 12%);
 }
 
 .backup-modal {
@@ -797,8 +873,8 @@ pre {
 .external-request-note {
   margin: var(--spacing-xs, 4px) 0 0;
   color: var(--color-text-control-secondary-default, #667085);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-20);
 }
 
 .external-request-note {
@@ -822,8 +898,8 @@ pre {
 
 .approval-details dt {
   color: var(--color-text-control-secondary-default, #667085);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--wallet-font-12);
+  line-height: var(--wallet-line-18);
 }
 
 .approval-details dd {
@@ -831,13 +907,13 @@ pre {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--color-text-control-primary-default, #1f2937);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-18);
 }
 
 .approval-raw {
   color: var(--color-text-control-secondary-default, #667085);
-  font-size: 12px;
+  font-size: var(--wallet-font-12);
 }
 
 .approval-raw pre {
@@ -849,8 +925,8 @@ pre {
   border-radius: var(--wallet-radius-control);
   background: var(--color-bg-control-secondary-default, #f7f9fc);
   color: var(--color-text-control-primary-default, #1f2937);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--wallet-font-12);
+  line-height: var(--wallet-line-18);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -866,12 +942,12 @@ pre {
   display: grid;
   gap: var(--spacing-xs, 4px);
   padding: var(--spacing-s, 8px) var(--spacing-m, 16px);
-  border: 1px solid #ef4444;
+  border: 1px solid var(--error-content-default, #ef4444);
   border-radius: var(--wallet-radius-control);
-  background-color: color-mix(in srgb, #ef4444 8%, var(--color-bg-block-primary-default, #ffffff));
-  color: #991b1b;
-  font-size: 13px;
-  line-height: 20px;
+  background-color: color-mix(in srgb, var(--error-fill-default, #fee2e2) 70%, var(--color-bg-block-primary-default, #ffffff));
+  color: var(--error-content-default, #991b1b);
+  font-size: var(--wallet-font-13);
+  line-height: var(--wallet-line-20);
 }
 
 .error-notice p {
@@ -888,12 +964,12 @@ pre {
 .error-notice__close {
   width: 28px;
   height: 28px;
-  border: 1px solid color-mix(in srgb, #ef4444 35%, var(--color-border-block-primary-default, #d7dee7));
+  border: 1px solid color-mix(in srgb, var(--error-content-default, #ef4444) 35%, var(--color-border-block-primary-default, #d7dee7));
   border-radius: var(--wallet-radius-control);
   background-color: transparent;
-  color: #7f1d1d;
+  color: var(--error-content-default, #7f1d1d);
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .error-notice details {
@@ -903,16 +979,16 @@ pre {
 .error-notice summary {
   width: fit-content;
   cursor: pointer;
-  color: #7f1d1d;
-  font-weight: 700;
+  color: var(--error-content-default, #7f1d1d);
+  font-weight: 600;
 }
 
 .error-notice pre {
   max-height: 180px;
   margin-top: var(--spacing-s, 8px);
-  border-color: color-mix(in srgb, #ef4444 35%, var(--color-border-block-primary-default, #d7dee7));
-  background-color: color-mix(in srgb, #ffffff 86%, #ef4444);
-  color: #7f1d1d;
+  border-color: color-mix(in srgb, var(--error-content-default, #ef4444) 35%, var(--color-border-block-primary-default, #d7dee7));
+  background-color: color-mix(in srgb, var(--color-bg-block-primary-default, #ffffff) 86%, var(--error-fill-default, #fee2e2));
+  color: var(--error-content-default, #7f1d1d);
 }
 
 .toggle-row {
