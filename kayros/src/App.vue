@@ -16,6 +16,13 @@ import type {
 } from '@/lib/types';
 
 type TabId = 'proofs' | 'lookup' | 'register' | 'settings';
+type ProofVisualStatus =
+  | 'working'
+  | 'valid-with-merkle'
+  | 'valid-no-merkle'
+  | 'valid-pending-merkle'
+  | 'valid-invalid-merkle'
+  | 'invalid-proof';
 
 interface ProofRowView extends ArchivedProofListEntry {
   expanded: boolean;
@@ -128,8 +135,28 @@ function rowBusy(row: ProofRowView): boolean {
   return busy.value || row.loading || row.updating || row.verifying;
 }
 
-function displayRowStatus(row: ProofRowView): ArchivedProofStatus | 'working' {
-  return row.updating || row.verifying ? 'working' : row.status;
+function proofVisualStatus(row: ProofRowView): ProofVisualStatus {
+  if (row.updating || row.verifying) {
+    return 'working';
+  }
+
+  if (row.status === 'proof_invalid') {
+    return 'invalid-proof';
+  }
+
+  if (!row.hasMerkleProof) {
+    return 'valid-no-merkle';
+  }
+
+  if (row.status === 'merkle_invalid') {
+    return 'valid-invalid-merkle';
+  }
+
+  if (row.status === 'pending') {
+    return 'valid-pending-merkle';
+  }
+
+  return 'valid-with-merkle';
 }
 
 function formatProofTimestamp(iso?: string): string {
@@ -684,22 +711,23 @@ onBeforeUnmount(() => {
             :key="proofKey(row)"
             class="proof-history-row"
             :data-expanded="row.expanded"
-            :data-status="displayRowStatus(row)"
+            :data-status="proofVisualStatus(row)"
           >
             <button class="proof-history-summary" type="button" @click="toggleProofRow(row)">
               <span class="proof-history-status">
                 <svg v-if="row.updating || row.verifying" class="spin" aria-hidden="true" viewBox="0 0 24 24">
                   <path d="M12 4a8 8 0 1 1-5.66 2.34" />
                 </svg>
-                <svg v-else-if="row.status === 'valid' || row.status === 'merkle_invalid'" aria-hidden="true" viewBox="0 0 24 24">
+                <svg
+                  v-else-if="proofVisualStatus(row) !== 'invalid-proof'"
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                >
                   <path d="m5 12 5 5L20 7" />
                 </svg>
-                <svg v-else-if="row.status === 'proof_invalid'" aria-hidden="true" viewBox="0 0 24 24">
+                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
                   <path d="M6 6l12 12" />
                   <path d="M18 6 6 18" />
-                </svg>
-                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="6" />
                 </svg>
               </span>
               <span class="proof-history-time">{{ formatProofTimestamp(row.createdAt) }}</span>
