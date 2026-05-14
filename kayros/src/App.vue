@@ -92,23 +92,18 @@ function proofDataType(row: ProofRowView): string {
 }
 
 function proofDataHash(row: ProofRowView): string {
-  const hash = row.bundle?.proof?.content?.hash;
+  const hash = row.bundle?.proof?.kayros?.hash;
   return typeof hash === 'string' ? hash : row.contentHash;
 }
 
 function proofRecordHash(row: ProofRowView): string {
-  const hash = row.bundle?.proof?.content?.response?.hash;
+  const hash = row.bundle?.proof?.kayros?.timestamp?.response?.response?.hash;
   return typeof hash === 'string' ? hash : '';
 }
 
 function proofRecordUrl(row: ProofRowView): string {
-  const direct = row.bundle?.proof?.content?.recordUrl;
-  if (typeof direct === 'string' && direct.trim()) {
-    return direct;
-  }
-
-  const hash = row.bundle?.proof?.content?.response?.hash;
-  const dataType = row.bundle?.proof?.content?.request?.dataType;
+  const hash = row.bundle?.proof?.kayros?.timestamp?.response?.response?.hash;
+  const dataType = row.bundle?.proof?.kayros?.timestamp?.response?.data?.data_type;
   if (
     typeof hash !== 'string' || !hash.trim()
     || typeof dataType !== 'string' || !dataType.trim()
@@ -294,6 +289,7 @@ async function notarizeRawContent() {
       {
         hash,
         archiveLabel: 'Raw content',
+        archiveRawContent: registerRawContent.value,
       },
     );
     await loadProofs();
@@ -416,12 +412,20 @@ async function loadProofBundle(row: ProofRowView) {
       dataType: row.dataType,
       contentHash: row.contentHash,
     };
-    const [proof, merkleProof, meta] = await Promise.all([
-      callThisAppService<typeof request, ArchivedProofBundle['proof']>(
-        KAYROS_SERVICE_NAME,
-        'getProofFile',
-        request,
-      ),
+    const proof = await callThisAppService<typeof request, ArchivedProofBundle['proof']>(
+      KAYROS_SERVICE_NAME,
+      'getProofFile',
+      request,
+    );
+
+    const [metadataProofResult, merkleProofResult, metaResult] = await Promise.allSettled([
+      row.hasMeta
+        ? callThisAppService<typeof request, ArchivedProofBundle['metadataProof']>(
+          KAYROS_SERVICE_NAME,
+          'getMetadataProofFile',
+          request,
+        )
+        : Promise.resolve(undefined),
       row.hasMerkleProof
         ? callThisAppService<typeof request, ArchivedProofBundle['merkleProof']>(
           KAYROS_SERVICE_NAME,
@@ -440,9 +444,13 @@ async function loadProofBundle(row: ProofRowView) {
       dataType: row.dataType,
       contentHash: row.contentHash,
       proof,
-      merkleProof,
-      meta,
+      metadataProof: metadataProofResult.status === 'fulfilled' ? metadataProofResult.value : undefined,
+      merkleProof: merkleProofResult.status === 'fulfilled' ? merkleProofResult.value : undefined,
+      meta: metaResult.status === 'fulfilled' ? metaResult.value : undefined,
     };
+  } catch (err) {
+    row.bundle = null;
+    row.note = err instanceof Error ? err.message : String(err);
   } finally {
     row.loading = false;
   }
@@ -888,40 +896,6 @@ onBeforeUnmount(() => {
                   </div>
                 </dl>
 
-                <article v-if="row.bundle.meta" class="proof-file-card">
-                  <div class="proof-file-head">
-                    <h3>Meta</h3>
-                    <div class="proof-file-actions">
-                      <button
-                        class="icon-action"
-                        :disabled="!row.bundle.meta"
-                        title="Download meta"
-                        aria-label="Download meta"
-                        @click="triggerDownload(`${row.contentHash}_meta.json`, jsonText(row.bundle.meta))"
-                      >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M12 4v10" />
-                          <path d="m8 10 4 4 4-4" />
-                          <path d="M5 18h14" />
-                        </svg>
-                      </button>
-                      <button
-                        class="icon-action"
-                        :disabled="!row.bundle.meta"
-                        title="Copy meta"
-                        aria-label="Copy meta"
-                        @click="copyText(jsonText(row.bundle.meta))"
-                      >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <rect x="9" y="9" width="10" height="10" rx="2" />
-                          <rect x="5" y="5" width="10" height="10" rx="2" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <textarea readonly :value="jsonText(row.bundle.meta)" />
-                </article>
-
                 <article v-if="row.bundle.proof" class="proof-file-card">
                   <div class="proof-file-head">
                     <h3>Proof</h3>
@@ -969,24 +943,52 @@ onBeforeUnmount(() => {
                   <textarea readonly :value="jsonText(row.bundle.proof)" />
                 </article>
 
+                <article v-if="row.bundle.metadataProof" class="proof-file-card">
+                  <div class="proof-file-head">
+                    <h3>Metadata proof</h3>
+                    <div class="proof-file-actions">
+                      <button
+                        class="icon-action"
+                        :disabled="!row.bundle.metadataProof"
+                        title="Download metadata proof"
+                        aria-label="Download metadata proof"
+                        @click="triggerDownload(`${row.contentHash}_metadata_proof.json`, jsonText(row.bundle.metadataProof))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 4v10" />
+                          <path d="m8 10 4 4 4-4" />
+                          <path d="M5 18h14" />
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-action"
+                        :disabled="!row.bundle.metadataProof"
+                        title="Copy metadata proof"
+                        aria-label="Copy metadata proof"
+                        @click="copyText(jsonText(row.bundle.metadataProof))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2" />
+                          <rect x="5" y="5" width="10" height="10" rx="2" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <textarea readonly :value="jsonText(row.bundle.metadataProof)" />
+                </article>
+
                 <article v-if="row.bundle.merkleProof !== undefined" class="proof-file-card">
                   <div class="proof-file-head">
                     <h3>Merkle proof</h3>
                     <div class="proof-file-actions">
                       <button
                         class="icon-action"
-                        title="Delete merkle proof"
-                        aria-label="Delete merkle proof"
+                        title="Remove merkle proof"
+                        aria-label="Remove merkle proof"
                         :disabled="rowBusy(row)"
                         @click="removeMerkleProofRow(row)"
                       >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <path d="M4 7h16" />
-                          <path d="M9 7V5h6v2" />
-                          <path d="M7 7l1 12h8l1-12" />
-                          <path d="M10 11v5" />
-                          <path d="M14 11v5" />
-                        </svg>
+                        <span class="icon-action__glyph" aria-hidden="true">✕</span>
                       </button>
                       <button
                         class="icon-action"

@@ -6,6 +6,7 @@ import {
   verifyMerkleProof,
   verifyWithInclusion,
 } from "@kuip/provable-sdk";
+import { KayrosEnvelope } from "@kuip/provable-proof";
 import { DEFAULT_SETTINGS, KAYROS_SERVICE_NAME, PROOFS_INDEX_FILE, PROOFS_ROOT_FOLDER, SETTINGS_FILE } from "../src/lib/constants.ts";
 
 declare const w3n: any;
@@ -15,6 +16,7 @@ const KAYROS_REGISTER_RETRIES = 3;
 const KAYROS_REGISTER_RETRY_DELAY_MS = 200;
 const KAYROS_MERKLE_FETCH_DELAYS_MS = [10_000, 20_000] as const;
 const UUID_GREGORIAN_EPOCH = 122192928000000000n;
+const PROVABLE_SDK_SERVICE = "@kuip/provable-sdk@0.1.2:prove_single_hash";
 
 type ArchivedProofStatus = "valid" | "merkle_invalid" | "proof_invalid" | "pending";
 
@@ -72,25 +74,31 @@ function decodeJsonObject(data: { bytes?: Uint8Array } | undefined): Record<stri
   return (decoded && typeof decoded === "object") ? decoded : {};
 }
 
-function stableSerialize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableSerialize).join(",")}]`;
-  }
-
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => `${JSON.stringify(key)}:${stableSerialize(nested)}`);
-    return `{${entries.join(",")}}`;
-  }
-
-  return JSON.stringify(value);
-}
-
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map(byte => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function textToBase64(value: string): string {
+  return bytesToBase64(new TextEncoder().encode(value));
+}
+
+function base64ToText(value: string): string {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 function hexToBytes(hex: string): Uint8Array {
@@ -155,6 +163,11 @@ function timeuuidToTimestamp(value: unknown): string | undefined {
 }
 
 function resolveProofCreatedAt(proof: any): string | undefined {
+  const newTimeuuid = proof?.kayros?.timestamp?.response?.response?.timeuuid;
+  if (typeof newTimeuuid === "string" && newTimeuuid.trim()) {
+    return timeuuidToTimestamp(newTimeuuid);
+  }
+
   const uploadedAt = proof?.uploadedAt || proof?.metadataPayload?.uploadedAt;
   if (typeof uploadedAt === "string" && uploadedAt.trim()) {
     return uploadedAt;
@@ -241,13 +254,13 @@ function buildProofArchivePaths(dataType: string, contentHash: string) {
   return {
     dataTypeFolder,
     proofFileName: `${contentHash}_proof.json`,
+    metadataProofFileName: `${contentHash}_metadata_proof.json`,
     merkleProofFileName: `${contentHash}_merkle-proof.json`,
     merkleProofCandidateFileName: `${contentHash}_merkle-proof-candidate.json`,
-    metaFileName: `${contentHash}_meta.json`,
     proofPath: `${dataTypeFolder}/${contentHash}_proof.json`,
+    metadataProofPath: `${dataTypeFolder}/${contentHash}_metadata_proof.json`,
     merkleProofPath: `${dataTypeFolder}/${contentHash}_merkle-proof.json`,
     merkleProofCandidatePath: `${dataTypeFolder}/${contentHash}_merkle-proof-candidate.json`,
-    metaPath: `${dataTypeFolder}/${contentHash}_meta.json`,
   };
 }
 
@@ -274,7 +287,7 @@ function deriveArchivedProofStatus(entry: Partial<ProofIndexEntry>): ArchivedPro
   if (!entry.hasProof) {
     return "proof_invalid";
   }
-  return entry.hasMerkleProof ? "valid" : "pending";
+  return "valid";
 }
 
 function normalizeProofIndexEntry(entry: unknown): ProofIndexEntry | null {
@@ -406,7 +419,7 @@ async function deleteProofsRoot() {
       await proofsFs.deleteFile(archivePaths.proofPath).catch(() => {});
     }
     if (entry.hasMeta) {
-      await proofsFs.deleteFile(archivePaths.metaPath).catch(() => {});
+      await proofsFs.deleteFile(archivePaths.metadataProofPath).catch(() => {});
     }
     if (entry.hasMerkleProof) {
       await proofsFs.deleteFile(archivePaths.merkleProofPath).catch(() => {});
@@ -440,6 +453,7 @@ async function storeArchivedProofBundle(
   dataType: string,
   contentHash: string,
   proof: any,
+  metadataProof: any | undefined,
   meta: any,
   merkleProof: any | undefined,
   statusOverride?: ArchivedProofStatus,
@@ -449,7 +463,9 @@ async function storeArchivedProofBundle(
   const folderFs = await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
 
   await folderFs.writeJSONFile(archivePaths.proofFileName, proof);
-  await folderFs.writeJSONFile(archivePaths.metaFileName, meta);
+  if (metadataProof !== undefined) {
+    await folderFs.writeJSONFile(archivePaths.metadataProofFileName, metadataProof);
+  }
 
   if (merkleProof !== undefined) {
     await folderFs.writeJSONFile(archivePaths.merkleProofFileName, merkleProof);
@@ -460,11 +476,11 @@ async function storeArchivedProofBundle(
     dataType,
     contentHash,
     createdAt: meta?.createdAt,
-    status: statusOverride ?? (merkleProof !== undefined ? "valid" : "pending"),
+    status: statusOverride ?? (merkleProof !== undefined ? "valid" : "valid"),
     hasProof: true,
     hasMerkleProof: merkleProof !== undefined,
     hasCandidateMerkleProof: false,
-    hasMeta: true,
+    hasMeta: metadataProof !== undefined,
   }));
 }
 
@@ -518,18 +534,19 @@ async function loadArchivedProofBundle(dataType: string, contentHash: string) {
   const rootFs = await getProofsRootFS();
   const archivePaths = buildProofArchivePaths(dataType, contentHash);
 
-  const [proof, merkleProof, meta] = await Promise.all([
+  const [proof, metadataProof, merkleProof] = await Promise.all([
     readJSONIfPresent(rootFs, archivePaths.proofPath),
+    readJSONIfPresent(rootFs, archivePaths.metadataProofPath),
     readJSONIfPresent(rootFs, archivePaths.merkleProofPath),
-    readJSONIfPresent(rootFs, archivePaths.metaPath),
   ]);
 
   return {
     dataType,
     contentHash,
     proof,
+    metadataProof,
     merkleProof,
-    meta,
+    meta: undefined,
   };
 }
 
@@ -744,18 +761,110 @@ function buildKayrosXAttrs(proof: any): Record<string, unknown> {
   };
 }
 
-function getProofRequestParts(notaryEntry: any) {
-  const request = notaryEntry?.request;
-  const response = notaryEntry?.response;
-  if (!request?.kayrosHost || !request?.dataType || !response?.hash || !notaryEntry?.hash) {
+function buildArchivedProofPayload(
+  data: unknown,
+  dataFormat: "PrivacySafe_file" | "PrivacySafe_file_metadata" | "raw_data" | "raw_hash",
+  dataHash: string,
+  registrationResponse: any,
+  recordResponse: any,
+) {
+  return KayrosEnvelope.fromData(data, {
+    hash: dataHash,
+    hashAlgorithm: SHA256_ALGORITHM,
+    timestamp: {
+      service: PROVABLE_SDK_SERVICE,
+      response: {
+        success: true,
+        response: registrationResponse,
+        data: recordResponse,
+      },
+    },
+  }, dataFormat).toJSON();
+}
+
+function getStoredProofRequestParts(proof: any, hostFallback: string, dataTypeFallback: string) {
+  const envelope = KayrosEnvelope.fromJSON(JSON.stringify(proof));
+  const kayrosHash = envelope.getKayrosHash();
+  const dataItem = envelope.getDataHash();
+  const dataType = envelope.getDataType() || dataTypeFallback;
+  if (!kayrosHash || !dataItem || !dataType) {
     throw new Error("Stored proof is missing Kayros registration data.");
   }
 
   return {
-    kayrosHost: request.kayrosHost,
-    dataType: request.dataType,
-    dataItem: notaryEntry.hash,
-    kayrosHash: response.hash,
+    kayrosHost: hostFallback,
+    dataType,
+    dataItem,
+    kayrosHash,
+  };
+}
+
+function getStoredProofMeta(proof: any) {
+  const envelope = KayrosEnvelope.fromJSON(JSON.stringify(proof));
+  if (envelope.getDataFormat() !== "PrivacySafe_file") {
+    return undefined;
+  }
+
+  try {
+    const decoded = envelope.parseData<any>();
+    return {
+      createdAt: resolveProofCreatedAt(proof) || decoded?.uploadedAt,
+      currentFilePath: typeof decoded?.currentFilePath === "string" ? decoded.currentFilePath : "",
+      fsId: typeof decoded?.fsId === "string" ? decoded.fsId : null,
+      originalFilename: typeof decoded?.originalFilename === "string" ? decoded.originalFilename : "",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function verifyEnvelopePayloadHash(proof: any): Promise<{
+  ok: boolean;
+  skipped: boolean;
+  expectedHash?: string;
+  computedHash?: string;
+  detail: string;
+}> {
+  const envelope = KayrosEnvelope.fromJSON(JSON.stringify(proof));
+  const dataFormat = envelope.getDataFormat();
+  const expectedHash = envelope.getDataHash();
+
+  if (!expectedHash) {
+    return {
+      ok: false,
+      skipped: false,
+      detail: "Stored proof is missing envelope data hash.",
+    };
+  }
+
+  if (dataFormat === "raw_hash") {
+    return {
+      ok: true,
+      skipped: true,
+      expectedHash,
+      computedHash: expectedHash,
+      detail: `Raw hash proof: using stored hash ${expectedHash}.`,
+    };
+  }
+
+  if (dataFormat === "PrivacySafe_file") {
+    return {
+      ok: true,
+      skipped: true,
+      expectedHash,
+      detail: "PrivacySafe_file proof: local file-content hash reconstruction is not available from the stored payload.",
+    };
+  }
+
+  const computedHash = await envelope.computeDataHash();
+  return {
+    ok: computedHash === expectedHash,
+    skipped: false,
+    expectedHash,
+    computedHash,
+    detail: computedHash === expectedHash
+      ? `Reconstructed hash matches stored envelope hash ${expectedHash}.`
+      : `Reconstructed hash mismatch: expected ${expectedHash}, computed ${computedHash}.`,
   };
 }
 
@@ -778,28 +887,6 @@ function prefixDetails(prefix: string, details?: string[]): string[] {
     return [];
   }
   return details.map(detail => `${prefix}: ${detail}`);
-}
-
-function hasMetadataRegistration(proof: any): boolean {
-  return !!(
-    proof?.metadata?.request?.kayrosHost
-    && proof?.metadata?.request?.dataType
-    && proof?.metadata?.response?.hash
-    && proof?.metadata?.hash
-  );
-}
-
-function mergeMerkleStatus(
-  contentStatus: Exclude<ArchivedProofStatus, "proof_invalid">,
-  metadataStatus: Exclude<ArchivedProofStatus, "proof_invalid">,
-): Exclude<ArchivedProofStatus, "proof_invalid"> {
-  if (contentStatus === "merkle_invalid" || metadataStatus === "merkle_invalid") {
-    return "merkle_invalid";
-  }
-  if (contentStatus === "pending" || metadataStatus === "pending") {
-    return "pending";
-  }
-  return "valid";
 }
 
 class KayrosService {
@@ -851,16 +938,18 @@ class KayrosService {
       try {
         const result = await this.registerHashOnce(request);
         const successful = ensureKayrosRegistrationSucceeded(result);
-        try {
-          await this.archiveManualRegistration(successful, resolved, request);
-        } catch (archiveErr) {
-          const detail = {
-            dataType: resolved.dataType,
-            contentHash: successful.request?.hash ?? "",
-            error: formatError(archiveErr),
-          };
-          console.warn("Failed to store archived proof for manual registration.", detail);
-          await w3n?.log?.("error", "Failed to store archived proof for manual registration.", detail);
+        if (request.skipArchive !== true) {
+          try {
+            await this.archiveManualRegistration(successful, resolved, request);
+          } catch (archiveErr) {
+            const detail = {
+              dataType: resolved.dataType,
+              contentHash: successful.request?.hash ?? "",
+              error: formatError(archiveErr),
+            };
+            console.warn("Failed to store archived proof for manual registration.", detail);
+            await w3n?.log?.("error", "Failed to store archived proof for manual registration.", detail);
+          }
         }
         return successful;
       } catch (err) {
@@ -925,47 +1014,30 @@ class KayrosService {
     };
   }
 
-  private async fetchMerkleProofsForProof(proof: any, userKey?: string) {
-    const contentRequest = proof.content?.request;
-    const metadataRequest = proof.metadata?.request;
-    const contentHashItem = proof.content?.response?.hash;
-    const metadataHashItem = proof.metadata?.response?.hash;
+  private async fetchMerkleProofsForProof(
+    proof: any,
+    kayrosHost: string,
+    dataType: string,
+    userKey?: string,
+  ) {
+    const requestParts = getStoredProofRequestParts(
+      proof,
+      kayrosHost,
+      dataType,
+    );
 
-    if (!contentRequest?.kayrosHost || !contentRequest?.dataType || !contentHashItem) {
-      throw new Error("Missing content registration data needed to fetch Merkle proof.");
-    }
-
-    const contentMerkle = await getMerkleProof(
-      contentRequest.kayrosHost,
-      contentRequest.dataType,
-      contentHashItem,
+    return await getMerkleProof(
+      requestParts.kayrosHost,
+      requestParts.dataType,
+      requestParts.kayrosHash,
       userKey,
     ).then(ensureMerkleProofSucceeded);
-
-    if (!metadataRequest?.kayrosHost || !metadataRequest?.dataType || !metadataHashItem) {
-      return {
-        version: 1,
-        content: contentMerkle,
-      };
-    }
-
-    const metadataMerkle = await getMerkleProof(
-      metadataRequest.kayrosHost,
-      metadataRequest.dataType,
-      metadataHashItem,
-      userKey,
-    ).then(ensureMerkleProofSucceeded);
-
-    return {
-      version: 1,
-      content: contentMerkle,
-      metadata: metadataMerkle,
-    };
   }
 
   private scheduleMerkleProofPersistence(
     proof: any,
     contentHash: string,
+    kayrosHost: string,
     dataType: string,
     fullFilePath: string,
     userKey?: string,
@@ -985,7 +1057,7 @@ class KayrosService {
           }
 
           try {
-            const merkleProof = await this.fetchMerkleProofsForProof(proof, userKey);
+            const merkleProof = await this.fetchMerkleProofsForProof(proof, kayrosHost, dataType, userKey);
             const evaluation = await this.evaluateMerkleProofBundle(merkleProof);
             await storeArchivedMerkleProof(dataType, contentHash, merkleProof, evaluation.status);
             completed = true;
@@ -1014,6 +1086,8 @@ class KayrosService {
 
   private async verifyStoredProofBundle(
     bundle: any,
+    kayrosHost: string,
+    dataType: string,
     userKey?: string,
   ): Promise<{ status: ArchivedProofStatus; note: string | null; details: string[] }> {
     const proof = bundle?.proof;
@@ -1021,7 +1095,17 @@ class KayrosService {
       return { status: "proof_invalid", note: "Missing archived proof file.", details: [] };
     }
 
-    const content = getProofRequestParts(proof.content);
+    const contentHashCheck = await verifyEnvelopePayloadHash(proof);
+    if (!contentHashCheck.ok) {
+      return {
+        status: "proof_invalid",
+        note: contentHashCheck.detail,
+        details: [],
+      };
+    }
+    const localHashDetails = [`Content payload: ${contentHashCheck.detail}`];
+
+    const content = getStoredProofRequestParts(proof, kayrosHost, dataType);
     const apiKey = userKey?.trim() || undefined;
 
     setKayrosHost(content.kayrosHost);
@@ -1039,8 +1123,8 @@ class KayrosService {
       };
     }
 
-    if (hasMetadataRegistration(proof)) {
-      const metadata = getProofRequestParts(proof.metadata);
+    if (bundle?.metadataProof) {
+      const metadata = getStoredProofRequestParts(bundle.metadataProof, kayrosHost, dataType);
       setKayrosHost(metadata.kayrosHost);
       const metadataVerification = await verifyWithInclusion({
         dataType: metadata.dataType,
@@ -1048,126 +1132,64 @@ class KayrosService {
         kayrosHash: metadata.kayrosHash,
         apiKey,
       });
+      const metadataHashCheck = await verifyEnvelopePayloadHash(bundle.metadataProof);
+      if (!metadataHashCheck.ok) {
+        return {
+          status: "proof_invalid",
+          note: metadataHashCheck.detail,
+          details: localHashDetails,
+        };
+      }
+      localHashDetails.push(`Metadata payload: ${metadataHashCheck.detail}`);
       if (!metadataVerification.valid) {
         return {
           status: "proof_invalid",
           note: metadataVerification.error ?? "Metadata proof verification failed.",
-          details: [],
+          details: localHashDetails,
         };
       }
     }
 
-    const storedMerkleProof = bundle?.merkleProof as { content?: unknown; metadata?: unknown } | undefined;
-    if (!storedMerkleProof?.content) {
+    const storedMerkleProof = bundle?.merkleProof;
+    if (!storedMerkleProof) {
       return {
         status: "valid",
         note: "Proof file is valid. No Merkle proof saved.",
-        details: [],
+        details: localHashDetails,
       };
     }
 
-    const contentMerkleVerification = await verifyMerkleProof({
-      proof: storedMerkleProof.content as never,
+    const merkleVerification = await verifyMerkleProof({
+      proof: storedMerkleProof as never,
     });
-    if (contentMerkleVerification.status === "invalid") {
+    if (merkleVerification.status === "invalid") {
       return {
         status: "merkle_invalid",
-        note: `Stored content merkle proof is invalid: ${contentMerkleVerification.error ?? contentMerkleVerification.message ?? "unknown error"}`,
-        details: prefixDetails("Content", contentMerkleVerification.details),
+        note: `Stored Merkle proof is invalid: ${merkleVerification.error ?? merkleVerification.message ?? "unknown error"}`,
+        details: [...localHashDetails, ...(merkleVerification.details ?? [])],
       };
     }
-
-    if (!hasMetadataRegistration(proof)) {
-      return {
-        status: contentMerkleVerification.status === "pending" ? "pending" : "valid",
-        note: contentMerkleVerification.message ?? null,
-        details: prefixDetails("Content", contentMerkleVerification.details),
-      };
-    }
-
-    if (!storedMerkleProof?.metadata) {
-      return {
-        status: "valid",
-        note: "Proof file is valid. No metadata Merkle proof saved.",
-        details: prefixDetails("Content", contentMerkleVerification.details),
-      };
-    }
-
-    const metadataMerkleVerification = await verifyMerkleProof({
-      proof: storedMerkleProof.metadata as never,
-    });
-
-    if (metadataMerkleVerification.status === "invalid") {
-      return {
-        status: "merkle_invalid",
-        note: `Stored metadata merkle proof is invalid: ${metadataMerkleVerification.error ?? metadataMerkleVerification.message ?? "unknown error"}`,
-        details: prefixDetails("Metadata", metadataMerkleVerification.details),
-      };
-    }
-
-    const mergedStatus = mergeMerkleStatus(
-      contentMerkleVerification.status === "pending" ? "pending" : "valid",
-      metadataMerkleVerification.status === "pending" ? "pending" : "valid",
-    );
-    const details = [
-      ...prefixDetails("Content", contentMerkleVerification.details),
-      ...prefixDetails("Metadata", metadataMerkleVerification.details),
-    ];
 
     return {
-      status: mergedStatus,
-      note: mergedStatus === "pending"
-        ? (contentMerkleVerification.status === "pending"
-          ? contentMerkleVerification.message
-          : metadataMerkleVerification.message)
-        : joinMessages(contentMerkleVerification.message, metadataMerkleVerification.message),
-      details,
+      status: merkleVerification.status === "pending" ? "pending" : "valid",
+      note: merkleVerification.message ?? null,
+      details: [...localHashDetails, ...(merkleVerification.details ?? [])],
     };
   }
 
   private async evaluateMerkleProofBundle(
-    merkleProof: { content?: unknown; metadata?: unknown },
+    merkleProof: unknown,
   ): Promise<{ status: Exclude<ArchivedProofStatus, "proof_invalid">; note: string | null }> {
-    if (!merkleProof?.content) {
-      return {
-        status: "pending",
-        note: "Merkle proof is pending.",
-      };
-    }
-
-    const contentResult = await verifyMerkleProof({ proof: merkleProof.content as never });
-
-    if (contentResult.status === "invalid") {
+    const result = await verifyMerkleProof({ proof: merkleProof as never });
+    if (result.status === "invalid") {
       return {
         status: "merkle_invalid",
-        note: `Stored content merkle proof is invalid: ${contentResult.error ?? contentResult.message ?? "unknown error"}`,
+        note: `Stored Merkle proof is invalid: ${result.error ?? result.message ?? "unknown error"}`,
       };
     }
-
-    if (!merkleProof?.metadata) {
-      return {
-        status: contentResult.status === "pending" ? "pending" : "valid",
-        note: contentResult.message ?? null,
-      };
-    }
-
-    const metadataResult = await verifyMerkleProof({ proof: merkleProof.metadata as never });
-    if (metadataResult.status === "invalid") {
-      return {
-        status: "merkle_invalid",
-        note: `Stored metadata merkle proof is invalid: ${metadataResult.error ?? metadataResult.message ?? "unknown error"}`,
-      };
-    }
-
-    const status = mergeMerkleStatus(
-      contentResult.status === "pending" ? "pending" : "valid",
-      metadataResult.status === "pending" ? "pending" : "valid",
-    );
     return {
-      status,
-      note: status === "pending"
-        ? (contentResult.status === "pending" ? contentResult.message : metadataResult.message)
-        : joinMessages(contentResult.message, metadataResult.message),
+      status: result.status === "pending" ? "pending" : "valid",
+      note: result.message ?? null,
     };
   }
 
@@ -1200,11 +1222,15 @@ class KayrosService {
     });
 
     try {
-      const latestMerkleProof = await this.fetchMerkleProofsForProof(bundle.proof, resolved.userKey);
+      const latestMerkleProof = await this.fetchMerkleProofsForProof(
+        bundle.proof,
+        resolved.kayrosHost,
+        resolved.dataType,
+        resolved.userKey,
+      );
       const evaluation = await this.evaluateMerkleProofBundle(latestMerkleProof);
-      const storedMerkleProof = bundle.merkleProof as { content?: unknown; metadata?: unknown } | undefined;
-
-      if (!storedMerkleProof?.content || (hasMetadataRegistration(bundle.proof) && !storedMerkleProof?.metadata)) {
+      const storedMerkleProof = bundle.merkleProof;
+      if (!storedMerkleProof) {
         await storeArchivedMerkleProof(resolved.dataType, contentHash, latestMerkleProof, evaluation.status);
         return {
           dataType: resolved.dataType,
@@ -1217,32 +1243,17 @@ class KayrosService {
         };
       }
 
-      const incompatibilities: string[] = [];
-      const contentCompatibility = checkMerkleProofCompatibility(
-        storedMerkleProof.content as never,
-        latestMerkleProof.content as never,
+      const compatibility = checkMerkleProofCompatibility(
+        storedMerkleProof as never,
+        latestMerkleProof as never,
       );
-      if (!contentCompatibility.compatible) {
-        incompatibilities.push(getPrimaryMismatchMessage(contentCompatibility, "content proof incompatible"));
-      }
-
-      if (hasMetadataRegistration(bundle.proof)) {
-        const metadataCompatibility = checkMerkleProofCompatibility(
-          storedMerkleProof.metadata as never,
-          latestMerkleProof.metadata as never,
-        );
-        if (!metadataCompatibility.compatible) {
-          incompatibilities.push(getPrimaryMismatchMessage(metadataCompatibility, "metadata proof incompatible"));
-        }
-      }
-
-      if (incompatibilities.length > 0) {
+      if (!compatibility.compatible) {
         await storeArchivedCandidateMerkleProof(resolved.dataType, contentHash, latestMerkleProof);
         return {
           dataType: resolved.dataType,
           contentHash,
           status: "merkle_invalid" as const,
-          note: incompatibilities.join("; "),
+          note: getPrimaryMismatchMessage(compatibility, "proof incompatible"),
           details: [],
           replacedMerkleProof: false,
           storedCandidateMerkleProof: true,
@@ -1300,7 +1311,7 @@ class KayrosService {
     });
 
     try {
-      const result = await this.verifyStoredProofBundle(bundle, resolved.userKey);
+      const result = await this.verifyStoredProofBundle(bundle, resolved.kayrosHost, resolved.dataType, resolved.userKey);
       await updateProofIndexState(resolved.dataType, contentHash, { status: result.status });
       logInfo("Verified Kayros archived proof", {
         dataType: resolved.dataType,
@@ -1344,6 +1355,14 @@ class KayrosService {
     return bundle.proof;
   }
 
+  async getMetadataProofFile(request: Record<string, unknown>) {
+    const stored = await readSettings();
+    const resolved = mergeSettings(stored, request);
+    const contentHash = String(request.contentHash ?? "").trim();
+    const bundle = await loadArchivedProofBundle(resolved.dataType, contentHash);
+    return bundle.metadataProof;
+  }
+
   async getMerkleProofFile(request: Record<string, unknown>) {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
@@ -1357,7 +1376,7 @@ class KayrosService {
     const resolved = mergeSettings(stored, request);
     const contentHash = String(request.contentHash ?? "").trim();
     const bundle = await loadArchivedProofBundle(resolved.dataType, contentHash);
-    return bundle.meta;
+    return bundle.meta ?? getStoredProofMeta(bundle.proof);
   }
 
   async removeMerkleProofFile(request: Record<string, unknown>) {
@@ -1402,7 +1421,7 @@ class KayrosService {
 
     await Promise.all([
       proofsFs.deleteFile(archivePaths.proofPath).catch(() => {}),
-      proofsFs.deleteFile(archivePaths.metaPath).catch(() => {}),
+      proofsFs.deleteFile(archivePaths.metadataProofPath).catch(() => {}),
       proofsFs.deleteFile(archivePaths.merkleProofPath).catch(() => {}),
       proofsFs.deleteFile(archivePaths.merkleProofCandidatePath).catch(() => {}),
     ]);
@@ -1490,27 +1509,39 @@ class KayrosService {
     }
 
     const archivedAt = new Date().toISOString();
-    const proof = {
-      version: 1,
-      status: "registered",
-      source: "manual",
-      uploadedAt: archivedAt,
-      content: buildSuccessEntry("content", contentHash, result),
-    };
+    const hasRawContent = typeof request.archiveRawContent === "string";
+    const archivedPayload = hasRawContent
+      ? request.archiveRawContent
+      : {};
+    const archivedDataFormat = hasRawContent ? "raw_data" : "raw_hash";
+    const record = await getRecordByHash(
+      resolved.kayrosHost,
+      result.response.hash,
+      resolved.dataType,
+      resolved.userKey,
+    );
+    const proof = buildArchivedProofPayload(
+      archivedPayload,
+      archivedDataFormat,
+      contentHash,
+      result.response,
+      record,
+    );
     const meta = {
       createdAt: archivedAt,
-      currentFilePath: typeof request.archiveCurrentFilePath === "string" ? request.archiveCurrentFilePath : "",
-      fsId: typeof request.fsId === "string" ? request.fsId : null,
+      currentFilePath: "",
+      fsId: null,
       originalFilename: typeof request.archiveLabel === "string" && request.archiveLabel.trim()
         ? request.archiveLabel.trim()
-        : "Manual registration",
+        : (hasRawContent ? "Raw data" : "Raw hash"),
     };
-    const status: ArchivedProofStatus = resolved.saveMerkleProofs ? "pending" : "valid";
+    const status: ArchivedProofStatus = "valid";
 
     await storeArchivedProofBundle(
       resolved.dataType,
       contentHash,
       proof,
+      undefined,
       meta,
       undefined,
       status,
@@ -1520,8 +1551,9 @@ class KayrosService {
       this.scheduleMerkleProofPersistence(
         proof,
         contentHash,
+        resolved.kayrosHost,
         resolved.dataType,
-        meta.originalFilename,
+        "Raw data",
         resolved.userKey,
       );
     }
@@ -1536,12 +1568,12 @@ class KayrosService {
 
     const [contentHash, metadataHash] = await Promise.all([
       createSha256Hex(fileBytes),
-      createSha256Hex(new TextEncoder().encode(stableSerialize(request.metadataPayload))),
+      createSha256Hex(new TextEncoder().encode(JSON.stringify(request.metadataPayload))),
     ]);
 
     const [contentResult, metadataResult] = await Promise.allSettled([
-      this.registerHash({ hash: contentHash }),
-      this.registerHash({ hash: metadataHash }),
+      this.registerHash({ hash: contentHash, skipArchive: true }),
+      this.registerHash({ hash: metadataHash, skipArchive: true }),
     ]);
 
     const content = contentResult.status === "fulfilled"
@@ -1585,11 +1617,49 @@ class KayrosService {
     });
 
     const archivedDataType = proof.content.request?.dataType || proof.metadata.request?.dataType || stored.dataType;
+    let archivedProof: any;
     try {
+      const archivedData = {
+        version: 1,
+        storageFileId: request.metadataPayload.storageFileId,
+        originalName: request.metadataPayload.originalName,
+        mimeType: request.metadataPayload.mimeType,
+        size: request.metadataPayload.size,
+        lastModified: request.metadataPayload.lastModified,
+        uploadedAt: request.metadataPayload.uploadedAt,
+        currentFilePath: request.fullFilePath,
+        fsId: typeof request.fsId === "string" ? request.fsId : null,
+        originalFilename: request.metadataPayload.originalName,
+      };
+      archivedProof = buildArchivedProofPayload(
+        archivedData,
+        "PrivacySafe_file",
+        proof.content.hash,
+        contentResult.status === "fulfilled" ? contentResult.value.response : proof.content.response,
+        await getRecordByHash(
+          stored.kayrosHost,
+          contentResult.status === "fulfilled" ? contentResult.value.response.hash : proof.content.response.hash,
+          archivedDataType,
+          stored.userKey,
+        ),
+      );
+      const archivedMetadataProof = buildArchivedProofPayload(
+        request.metadataPayload,
+        "PrivacySafe_file_metadata",
+        proof.metadata.hash,
+        metadataResult.status === "fulfilled" ? metadataResult.value.response : proof.metadata.response,
+        await getRecordByHash(
+          stored.kayrosHost,
+          metadataResult.status === "fulfilled" ? metadataResult.value.response.hash : proof.metadata.response.hash,
+          archivedDataType,
+          stored.userKey,
+        ),
+      );
       await storeArchivedProofBundle(
         archivedDataType,
         proof.content.hash,
-        proof,
+        archivedProof,
+        archivedMetadataProof,
         {
           createdAt: archivedAt,
           currentFilePath: request.fullFilePath,
@@ -1597,6 +1667,7 @@ class KayrosService {
           originalFilename: request.metadataPayload.originalName,
         },
         undefined,
+        "valid",
       );
       logInfo("Stored Kayros archived proof bundle", {
         dataType: archivedDataType,
@@ -1620,8 +1691,9 @@ class KayrosService {
 
     if (stored.saveMerkleProofs) {
       this.scheduleMerkleProofPersistence(
-        proof,
+        archivedProof,
         proof.content.hash,
+        stored.kayrosHost,
         archivedDataType,
         request.fullFilePath,
         stored.userKey,
@@ -1714,6 +1786,15 @@ async function handleCall(connection: any, call: any): Promise<void> {
         callNum,
         callStatus: "end",
         data: encodeJson(await service.getProofFile(decodeJsonObject(data))),
+      });
+      return;
+    }
+
+    if (method === "getMetadataProofFile") {
+      await connection.send({
+        callNum,
+        callStatus: "end",
+        data: encodeJson(await service.getMetadataProofFile(decodeJsonObject(data))),
       });
       return;
     }

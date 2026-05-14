@@ -4,6 +4,7 @@ import type {
   GetRecordByDataItemResponse,
   ProveSingleHashResponse,
 } from '@kuip/provable-sdk';
+import type { KayrosProof, ProofDataFormat } from '@kuip/provable-proof';
 
 export interface KayrosSettings {
   kayrosHost: string;
@@ -38,11 +39,22 @@ export interface UploadedFileMetadata {
   uploadedAt: string;
 }
 
+export interface PrivacySafeFileProofData extends UploadedFileMetadata {
+  version: 1;
+  currentFilePath: string;
+  fsId?: string | null;
+  originalFilename: string;
+}
+
+export type RawDataProofData = string;
+
 export interface NotarizeStoredFileRequest {
   fullFilePath: string;
   metadataPayload: UploadedFileMetadata;
   fsId?: string | null;
 }
+
+export type ArchivedProofDataFormat = 'PrivacySafe_file' | 'PrivacySafe_file_metadata' | 'raw_data' | 'raw_hash';
 
 export type RegisterHashResult = {
   request: RegisterHashRequest;
@@ -74,16 +86,6 @@ export interface KayrosNotaryEntry {
   error?: string;
 }
 
-export interface KayrosUploadProof {
-  version: 1;
-  status: KayrosUploadStatus;
-  uploadedAt: string;
-  metadataPayload?: UploadedFileMetadata;
-  source?: 'upload' | 'manual';
-  content: KayrosNotaryEntry;
-  metadata?: KayrosNotaryEntry;
-}
-
 export type NotarizeStoredFileResult = {
   status: KayrosUploadStatus;
   proofWritten: boolean;
@@ -106,7 +108,8 @@ export interface ArchivedProofFileRequest extends ServiceRequestBase {
 export interface ArchivedProofBundle {
   dataType: string;
   contentHash: string;
-  proof?: KayrosUploadProof;
+  proof?: KayrosProof;
+  metadataProof?: KayrosProof;
   merkleProof?: unknown;
   meta?: KayrosProofMeta;
 }
