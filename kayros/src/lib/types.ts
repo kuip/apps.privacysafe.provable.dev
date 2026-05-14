@@ -137,6 +137,7 @@ export interface ArchivedProofActionResult {
 export interface ArchivedProofListEntry {
   dataType: string;
   contentHash: string;
+  title?: string;
   createdAt?: string;
   status: ArchivedProofStatus;
   hasProof: boolean;

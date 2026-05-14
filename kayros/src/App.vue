@@ -44,7 +44,9 @@ const settings = reactive<KayrosSettings>({
 
 const activeTab = ref<TabId>('proofs');
 const registerHash = ref('');
+const registerHashTitle = ref('');
 const registerRawContent = ref('');
+const registerRawTitle = ref('');
 const lookupHash = ref('');
 const lookupDataItem = ref('');
 const busy = ref(false);
@@ -89,6 +91,10 @@ function proofCurrentFilePath(row: ProofRowView): string {
 
 function proofDataType(row: ProofRowView): string {
   return row.dataType || '';
+}
+
+function proofTitle(row: ProofRowView): string {
+  return typeof row.title === 'string' ? row.title.trim() : '';
 }
 
 function proofDataHash(row: ProofRowView): string {
@@ -233,7 +239,9 @@ async function deleteKayrosData() {
 
     deleteConfirmText.value = '';
     registerHash.value = '';
+    registerHashTitle.value = '';
     registerRawContent.value = '';
+    registerRawTitle.value = '';
     lookupHash.value = '';
     lookupDataItem.value = '';
     registerResult.value = null;
@@ -262,6 +270,7 @@ async function notarizeCurrentHash() {
       'registerHash',
       {
         hash: registerHash.value,
+        archiveTitle: registerHashTitle.value,
         archiveLabel: 'Manual hash',
       },
     );
@@ -288,6 +297,7 @@ async function notarizeRawContent() {
       'registerHash',
       {
         hash,
+        archiveTitle: registerRawTitle.value,
         archiveLabel: 'Raw content',
         archiveRawContent: registerRawContent.value,
       },
@@ -816,7 +826,8 @@ onBeforeUnmount(() => {
               </span>
               <span class="proof-history-time">{{ formatProofTimestamp(row.createdAt) }}</span>
               <span class="proof-history-main">
-                <strong>{{ row.dataType }}</strong>
+                <strong>{{ proofTitle(row) }}</strong>
+                <small>{{ row.dataType }}</small>
                 <small>{{ row.contentHash }}</small>
               </span>
               <span class="proof-history-expand" aria-hidden="true">
@@ -1095,10 +1106,20 @@ onBeforeUnmount(() => {
       <article class="panel panel--action">
         <div class="panel-head">
           <h2>Register hash</h2>
-          <button :disabled="busy || !registerHash.trim()" @click="notarizeCurrentHash">
+          <button :disabled="busy || !registerHash.trim() || !registerHashTitle.trim()" @click="notarizeCurrentHash">
             Notarize
           </button>
         </div>
+
+        <label>
+          <span>Title</span>
+          <input
+            v-model.trim="registerHashTitle"
+            autocomplete="off"
+            placeholder="Enter a proof title"
+          />
+          <small>title will not be included in the data integrity proof</small>
+        </label>
 
         <label>
           <span>Content hash</span>
@@ -1117,10 +1138,20 @@ onBeforeUnmount(() => {
       <article class="panel panel--action">
         <div class="panel-head">
           <h2>Register raw content</h2>
-          <button :disabled="busy || !registerRawContent.trim()" @click="notarizeRawContent">
+          <button :disabled="busy || !registerRawContent.trim() || !registerRawTitle.trim()" @click="notarizeRawContent">
             Hash and notarize
           </button>
         </div>
+
+        <label>
+          <span>Title</span>
+          <input
+            v-model.trim="registerRawTitle"
+            autocomplete="off"
+            placeholder="Enter a proof title"
+          />
+          <small>title will not be included in the data integrity proof</small>
+        </label>
 
         <label>
           <span>Raw content</span>

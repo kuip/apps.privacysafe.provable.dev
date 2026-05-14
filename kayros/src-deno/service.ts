@@ -266,12 +266,21 @@ function buildProofArchivePaths(dataType: string, contentHash: string) {
 
 async function getProofsRootFS() {
   const fs = await w3n.storage.getAppSyncedFS();
+  await fs.makeFolder(PROOFS_ROOT_FOLDER).catch(() => {});
   return await fs.writableSubRoot(PROOFS_ROOT_FOLDER);
+}
+
+async function getProofArchiveFolderFS(dataType: string) {
+  const rootFs = await getProofsRootFS();
+  const archivePaths = buildProofArchivePaths(dataType, "");
+  await rootFs.makeFolder(archivePaths.dataTypeFolder).catch(() => {});
+  return await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
 }
 
 type ProofIndexEntry = {
   dataType: string;
   contentHash: string;
+  title?: string;
   createdAt?: string;
   status?: ArchivedProofStatus;
   hasProof: boolean;
@@ -305,6 +314,7 @@ function normalizeProofIndexEntry(entry: unknown): ProofIndexEntry | null {
   return {
     dataType,
     contentHash,
+    title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : undefined,
     createdAt: typeof item.createdAt === "string" && item.createdAt.trim() ? item.createdAt : undefined,
     status: deriveArchivedProofStatus(item as Partial<ProofIndexEntry>),
     hasProof: item.hasProof !== false,
@@ -374,6 +384,7 @@ async function updateProofIndexState(
     ...(existing ?? {
       dataType,
       contentHash,
+      title: undefined,
       hasProof: true,
       hasMerkleProof: false,
       hasCandidateMerkleProof: false,
@@ -455,12 +466,12 @@ async function storeArchivedProofBundle(
   proof: any,
   metadataProof: any | undefined,
   meta: any,
+  title: string | undefined,
   merkleProof: any | undefined,
   statusOverride?: ArchivedProofStatus,
 ) {
-  const rootFs = await getProofsRootFS();
   const archivePaths = buildProofArchivePaths(dataType, contentHash);
-  const folderFs = await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+  const folderFs = await getProofArchiveFolderFS(dataType);
 
   await folderFs.writeJSONFile(archivePaths.proofFileName, proof);
   if (metadataProof !== undefined) {
@@ -475,6 +486,7 @@ async function storeArchivedProofBundle(
   await writeProofIndex(upsertProofIndexEntry(indexEntries, {
     dataType,
     contentHash,
+    title: typeof title === "string" && title.trim() ? title.trim() : undefined,
     createdAt: meta?.createdAt,
     status: statusOverride ?? (merkleProof !== undefined ? "valid" : "valid"),
     hasProof: true,
@@ -490,9 +502,8 @@ async function storeArchivedMerkleProof(
   merkleProof: any,
   statusOverride?: ArchivedProofStatus,
 ) {
-  const rootFs = await getProofsRootFS();
   const archivePaths = buildProofArchivePaths(dataType, contentHash);
-  const folderFs = await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+  const folderFs = await getProofArchiveFolderFS(dataType);
   await folderFs.writeJSONFile(archivePaths.merkleProofFileName, merkleProof);
   await folderFs.deleteFile(archivePaths.merkleProofCandidateFileName).catch(() => {});
 
@@ -513,9 +524,8 @@ async function storeArchivedCandidateMerkleProof(
   contentHash: string,
   merkleProof: any,
 ) {
-  const rootFs = await getProofsRootFS();
   const archivePaths = buildProofArchivePaths(dataType, contentHash);
-  const folderFs = await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+  const folderFs = await getProofArchiveFolderFS(dataType);
   await folderFs.writeJSONFile(archivePaths.merkleProofCandidateFileName, merkleProof);
 
   const indexEntries = await readProofIndex();
@@ -1512,8 +1522,13 @@ class KayrosService {
     const hasRawContent = typeof request.archiveRawContent === "string";
     const archivedPayload = hasRawContent
       ? request.archiveRawContent
-      : {};
-    const archivedDataFormat = hasRawContent ? "raw_data" : "raw_hash";
+      : contentHash;
+      const archivedDataFormat = hasRawContent ? "raw_data" : "raw_hash";
+      const archiveTitle = typeof request.archiveTitle === "string" && request.archiveTitle.trim()
+        ? request.archiveTitle.trim()
+        : (typeof request.archiveLabel === "string" && request.archiveLabel.trim()
+        ? request.archiveLabel.trim()
+        : (hasRawContent ? "Raw data" : "Raw hash"));
     const record = await getRecordByHash(
       resolved.kayrosHost,
       result.response.hash,
@@ -1531,9 +1546,7 @@ class KayrosService {
       createdAt: archivedAt,
       currentFilePath: "",
       fsId: null,
-      originalFilename: typeof request.archiveLabel === "string" && request.archiveLabel.trim()
-        ? request.archiveLabel.trim()
-        : (hasRawContent ? "Raw data" : "Raw hash"),
+      originalFilename: archiveTitle,
     };
     const status: ArchivedProofStatus = "valid";
 
@@ -1543,6 +1556,7 @@ class KayrosService {
       proof,
       undefined,
       meta,
+      archiveTitle,
       undefined,
       status,
     );
@@ -1666,6 +1680,7 @@ class KayrosService {
           fsId: typeof request.fsId === "string" ? request.fsId : null,
           originalFilename: request.metadataPayload.originalName,
         },
+        request.metadataPayload.originalName,
         undefined,
         "valid",
       );
