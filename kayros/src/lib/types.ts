@@ -78,9 +78,10 @@ export interface KayrosUploadProof {
   version: 1;
   status: KayrosUploadStatus;
   uploadedAt: string;
-  metadataPayload: UploadedFileMetadata;
+  metadataPayload?: UploadedFileMetadata;
+  source?: 'upload' | 'manual';
   content: KayrosNotaryEntry;
-  metadata: KayrosNotaryEntry;
+  metadata?: KayrosNotaryEntry;
 }
 
 export type NotarizeStoredFileResult = {

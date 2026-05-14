@@ -49,6 +49,7 @@ const lookupHash = ref('');
 const lookupDataItem = ref('');
 const busy = ref(false);
 const deleteConfirmText = ref('');
+const removeProofTarget = ref<ProofRowView | null>(null);
 const successMessage = ref('');
 let successMessageTimer: number | undefined;
 
@@ -266,8 +267,10 @@ async function notarizeCurrentHash() {
       'registerHash',
       {
         hash: registerHash.value,
+        archiveLabel: 'Manual hash',
       },
     );
+    await loadProofs();
   } finally {
     busy.value = false;
   }
@@ -290,8 +293,10 @@ async function notarizeRawContent() {
       'registerHash',
       {
         hash,
+        archiveLabel: 'Raw content',
       },
     );
+    await loadProofs();
   } finally {
     busy.value = false;
   }
@@ -571,6 +576,77 @@ async function verifyProofRow(row: ProofRowView) {
     row.details = [];
   } finally {
     row.verifying = false;
+  }
+}
+
+function openRemoveProofDialog(row: ProofRowView) {
+  removeProofTarget.value = row;
+}
+
+function closeRemoveProofDialog() {
+  removeProofTarget.value = null;
+}
+
+async function removeProofRow() {
+  const row = removeProofTarget.value;
+  if (!row) {
+    return;
+  }
+
+  busy.value = true;
+  try {
+    await callThisAppService<
+      { dataType: string; contentHash: string },
+      { dataType: string; contentHash: string; removed: true }
+    >(
+      KAYROS_SERVICE_NAME,
+      'removeArchivedProof',
+      {
+        dataType: row.dataType,
+        contentHash: row.contentHash,
+      },
+    );
+    proofRows.value = proofRows.value.filter(entry => proofKey(entry) !== proofKey(row));
+    proofPage.value = Math.min(proofPage.value, Math.max(1, Math.ceil(proofRows.value.length / proofPageSize.value)));
+    setSuccess('Proof files removed.');
+    closeRemoveProofDialog();
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function removeMerkleProofRow(row: ProofRowView) {
+  if (!row.bundle?.merkleProof) {
+    return;
+  }
+
+  row.updating = true;
+  row.note = null;
+  try {
+    await callThisAppService<
+      { dataType: string; contentHash: string },
+      { dataType: string; contentHash: string; removed: true }
+    >(
+      KAYROS_SERVICE_NAME,
+      'removeMerkleProofFile',
+      {
+        dataType: row.dataType,
+        contentHash: row.contentHash,
+      },
+    );
+    row.hasMerkleProof = false;
+    row.status = row.status === 'proof_invalid' ? 'proof_invalid' : 'valid';
+    if (row.bundle) {
+      row.bundle = {
+        ...row.bundle,
+        merkleProof: undefined,
+      };
+    }
+    row.note = 'Merkle proof removed.';
+    row.details = [];
+    setSuccess('Merkle proof removed.');
+  } finally {
+    row.updating = false;
   }
 }
 
@@ -899,6 +975,21 @@ onBeforeUnmount(() => {
                     <div class="proof-file-actions">
                       <button
                         class="icon-action"
+                        title="Delete merkle proof"
+                        aria-label="Delete merkle proof"
+                        :disabled="rowBusy(row)"
+                        @click="removeMerkleProofRow(row)"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M4 7h16" />
+                          <path d="M9 7V5h6v2" />
+                          <path d="M7 7l1 12h8l1-12" />
+                          <path d="M10 11v5" />
+                          <path d="M14 11v5" />
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-action"
                         title="Download merkle proof"
                         aria-label="Download merkle proof"
                         @click="triggerDownload(`${row.contentHash}_merkle-proof.json`, jsonText(row.bundle.merkleProof))"
@@ -931,6 +1022,9 @@ onBeforeUnmount(() => {
                   </button>
                   <button class="proof-action-btn" :disabled="rowBusy(row) || !row.bundle.proof" @click="verifyProofRow(row)">
                     {{ row.verifying ? 'Verifying…' : 'Verify' }}
+                  </button>
+                  <button class="proof-action-btn btn--danger" :disabled="rowBusy(row)" @click="openRemoveProofDialog(row)">
+                    Remove
                   </button>
                 </div>
 
@@ -1104,5 +1198,22 @@ onBeforeUnmount(() => {
       <path d="m5 12 5 5L20 7" />
     </svg>
     <span>{{ successMessage }}</span>
+  </div>
+
+  <div v-if="removeProofTarget" class="modal-backdrop" @click.self="closeRemoveProofDialog">
+    <section class="confirm-modal">
+      <h2>Remove proof files</h2>
+      <p>
+        This action will permanently remove all files for this proof. You will not be able to recover them.
+      </p>
+      <div class="modal-actions">
+        <button type="button" :disabled="busy" @click="closeRemoveProofDialog">
+          Cancel
+        </button>
+        <button type="button" class="btn--danger" :disabled="busy" @click="removeProofRow">
+          Remove
+        </button>
+      </div>
+    </section>
   </div>
 </template>

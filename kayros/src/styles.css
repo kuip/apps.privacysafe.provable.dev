@@ -708,6 +708,40 @@ button:disabled {
   stroke-linejoin: round;
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--kayros-pad-shell);
+  background-color: rgb(0 0 0 / 0.56);
+}
+
+.confirm-modal {
+  width: min(420px, 100%);
+  display: grid;
+  gap: var(--spacing-m, 16px);
+  padding: var(--spacing-ml, 24px);
+  border: 1px solid var(--kayros-border);
+  border-radius: var(--kayros-radius-surface);
+  background-color: var(--kayros-bg-panel);
+  color: var(--kayros-text);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 40%);
+}
+
+.confirm-modal p {
+  color: var(--kayros-text-mute);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-s, 8px);
+}
+
 @keyframes toast-in {
   from {
     opacity: 0;
