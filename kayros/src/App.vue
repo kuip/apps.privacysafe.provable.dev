@@ -82,6 +82,14 @@ function jsonText(value: unknown): string {
   return value === undefined ? '' : JSON.stringify(value, null, 2);
 }
 
+function normalizeRegisterHashInput(value: string): string {
+  const trimmed = value.trim();
+  const withoutPrefix = trimmed.startsWith('0x') || trimmed.startsWith('0X')
+    ? trimmed.slice(2)
+    : trimmed;
+  return /^[0-9a-fA-F]{64}$/.test(withoutPrefix) ? withoutPrefix : trimmed;
+}
+
 function proofCurrentFilePath(row: ProofRowView): string {
   const path = row.bundle?.meta && typeof row.bundle.meta === 'object'
     ? (row.bundle.meta as { currentFilePath?: unknown }).currentFilePath
@@ -265,11 +273,13 @@ async function notarizeCurrentHash() {
   busy.value = true;
   registerResult.value = null;
   try {
+    const normalizedHash = normalizeRegisterHashInput(registerHash.value);
+    registerHash.value = normalizedHash;
     registerResult.value = await callThisAppService(
       KAYROS_SERVICE_NAME,
       'registerHash',
       {
-        hash: registerHash.value,
+        hash: normalizedHash,
         archiveTitle: registerHashTitle.value,
         archiveLabel: 'Manual hash',
       },
@@ -1126,7 +1136,7 @@ onBeforeUnmount(() => {
           <textarea
             v-model.trim="registerHash"
             rows="5"
-            placeholder="Paste a hex or base64 hash here"
+            placeholder="Paste a 32-byte hex or base64 hash here"
           />
         </label>
 

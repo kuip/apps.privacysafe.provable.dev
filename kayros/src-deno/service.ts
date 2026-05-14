@@ -117,6 +117,47 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
+function base64ToBytes(value: string): Uint8Array {
+  const compact = value.trim().replace(/\s+/g, "");
+  if (!compact.length || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(compact)) {
+    return new Uint8Array(0);
+  }
+  const normalized = compact.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  try {
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  } catch {
+    return new Uint8Array(0);
+  }
+}
+
+function normalizeRegisteredHashInput(value: unknown): string {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Missing hash.");
+  }
+
+  const withoutHexPrefix = trimmed.startsWith("0x") || trimmed.startsWith("0X")
+    ? trimmed.slice(2)
+    : trimmed;
+  const hexBytes = hexToBytes(withoutHexPrefix);
+  if (hexBytes.length === 32) {
+    return withoutHexPrefix.toLowerCase();
+  }
+
+  const base64Bytes = base64ToBytes(trimmed);
+  if (base64Bytes.length === 32) {
+    return trimmed;
+  }
+
+  throw new Error("Hash must be exactly 32 bytes, in hex or base64.");
+}
+
 async function createSha256Hex(bytes: Uint8Array): Promise<string> {
   const input = bytes.slice().buffer as ArrayBuffer;
   const digest = await crypto.subtle.digest("SHA-256", input);
@@ -874,7 +915,7 @@ function buildArchivedProofPayload(
   registrationResponse: any,
   recordResponse: any,
 ) {
-  return KayrosEnvelope.fromData(data, {
+  const kayrosData = {
     hash: dataHash,
     hashAlgorithm: SHA256_ALGORITHM,
     timestamp: {
@@ -885,7 +926,18 @@ function buildArchivedProofPayload(
         data: recordResponse,
       },
     },
-  }, dataFormat).toJSON();
+  };
+
+  if (dataFormat === "raw_hash") {
+    const normalizedHash = normalizeRegisteredHashInput(dataHash);
+    const hexBytes = hexToBytes(normalizedHash);
+    const base64Hash = hexBytes.length === 32
+      ? bytesToBase64(hexBytes)
+      : normalizedHash;
+    return new KayrosEnvelope(base64Hash, kayrosData, dataFormat).toJSON();
+  }
+
+  return KayrosEnvelope.fromData(data, kayrosData, dataFormat).toJSON();
 }
 
 function getStoredProofRequestParts(proof: any, hostFallback: string, dataTypeFallback: string) {
@@ -944,12 +996,15 @@ async function verifyEnvelopePayloadHash(proof: any): Promise<{
   }
 
   if (dataFormat === "raw_hash") {
+    const computedHash = bytesToHex(envelope.getData());
     return {
-      ok: true,
-      skipped: true,
+      ok: computedHash === expectedHash,
+      skipped: false,
       expectedHash,
-      computedHash: expectedHash,
-      detail: `Raw hash proof: using stored hash ${expectedHash}.`,
+      computedHash,
+      detail: computedHash === expectedHash
+        ? `Raw hash proof verified against stored hash ${expectedHash}.`
+        : `Raw hash proof mismatch: expected ${expectedHash}, computed ${computedHash}.`,
     };
   }
 
@@ -1016,7 +1071,7 @@ class KayrosService {
   private async registerHashOnce(request: Record<string, unknown>) {
     const stored = await readSettings();
     const resolved = mergeSettings(stored, request);
-    const hash = String(request.hash ?? "").trim();
+    const hash = normalizeRegisteredHashInput(request.hash);
     const response = await proveSingleHash(
       resolved.kayrosHost,
       hash,
