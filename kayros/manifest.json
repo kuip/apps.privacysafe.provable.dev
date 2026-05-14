@@ -3,7 +3,7 @@
   "appDomain": "kayros.app.provable.dev",
   "icon": "logo.png",
   "description": "Kayros cryptographic integrity proofs and record lookup for PrivacySafe apps.",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "components": {
     "/index.html": {
       "runtime": "web-gui",
@@ -16,6 +16,12 @@
           "KayrosNotary"
         ],
         "shell": {
+          "openURL": [
+            {
+              "schema": "https",
+              "domain": "kayros.provable.dev"
+            }
+          ],
           "fsResource": {
             "otherApps": {
               "launcher.app.privacysafe.io": "ui-settings"

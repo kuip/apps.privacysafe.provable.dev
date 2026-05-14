@@ -120,6 +120,7 @@ declare const w3n: {
       appDomain: string | undefined,
       resourceName: string,
     ): Promise<web3n.files.ReadonlyFile | undefined>;
+    openURL?: (url: string) => Promise<void>;
   };
   log?: (level: string, ...args: unknown[]) => void | Promise<void>;
 };

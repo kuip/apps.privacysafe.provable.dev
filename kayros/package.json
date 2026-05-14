@@ -1,6 +1,6 @@
 {
   "name": "kayros.app.provable.dev",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "Kayros cryptographic integrity app for PrivacySafe files and data",
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "serve": "vite preview"
   },
   "dependencies": {
-    "@kuip/provable-sdk": "^0.1.1",
+    "@kuip/provable-sdk": "^0.1.2",
     "@v1nt1248/3nclient-lib": "^0.2.64",
     "vue": "3.5.24"
   },

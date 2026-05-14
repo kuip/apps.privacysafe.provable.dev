@@ -95,6 +95,8 @@ export interface KayrosProofMeta {
   originalFilename: string;
 }
 
+export type ArchivedProofStatus = 'valid' | 'merkle_invalid' | 'proof_invalid' | 'pending';
+
 export interface ArchivedProofFileRequest extends ServiceRequestBase {
   dataType: string;
   contentHash: string;
@@ -118,10 +120,21 @@ export interface SaveMerkleProofFileResult {
   saved: true;
 }
 
+export interface ArchivedProofActionResult {
+  dataType: string;
+  contentHash: string;
+  status: ArchivedProofStatus;
+  note: string | null;
+  details?: string[];
+  replacedMerkleProof: boolean;
+  storedCandidateMerkleProof: boolean;
+}
+
 export interface ArchivedProofListEntry {
   dataType: string;
   contentHash: string;
   createdAt?: string;
+  status: ArchivedProofStatus;
   hasProof: boolean;
   hasMerkleProof: boolean;
   hasMeta: boolean;

@@ -1,35 +1,31 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import {
-  checkMerkleProofCompatibility,
-  get_merkle_proof,
-  setKayrosHost,
-  verifyWithInclusion,
-} from '@kuip/provable-sdk';
+import { getRecordUrl, setKayrosHost } from '@kuip/provable-sdk';
 import { callThisAppService } from '@/lib/json-rpc';
 import { KAYROS_SERVICE_NAME } from '@/lib/constants';
 import type {
+  ArchivedProofActionResult,
   ArchivedProofBundle,
   ArchivedProofListEntry,
+  ArchivedProofStatus,
   KayrosSettings,
   ListArchivedProofsResult,
   LookupDataItemResult,
   LookupRecordResult,
   RegisterHashResult,
-  SaveMerkleProofFileResult,
 } from '@/lib/types';
 
 type TabId = 'proofs' | 'lookup' | 'register' | 'settings';
-type ProofStatus = 'success' | 'failed';
 
 interface ProofRowView extends ArchivedProofListEntry {
   expanded: boolean;
   loading: boolean;
   updating: boolean;
   verifying: boolean;
-  status: ProofStatus;
+  status: ArchivedProofStatus;
   bundle: ArchivedProofBundle | null;
   note: string | null;
+  details: string[];
 }
 
 const settings = reactive<KayrosSettings>({
@@ -97,8 +93,43 @@ function proofRecordHash(row: ProofRowView): string {
   return typeof hash === 'string' ? hash : '';
 }
 
+function proofRecordUrl(row: ProofRowView): string {
+  const direct = row.bundle?.proof?.content?.recordUrl;
+  if (typeof direct === 'string' && direct.trim()) {
+    return direct;
+  }
+
+  const hash = row.bundle?.proof?.content?.response?.hash;
+  const dataType = row.bundle?.proof?.content?.request?.dataType;
+  if (
+    typeof hash !== 'string' || !hash.trim()
+    || typeof dataType !== 'string' || !dataType.trim()
+  ) {
+    return '';
+  }
+
+  setKayrosHost(settings.kayrosHost);
+  return getRecordUrl(hash, dataType);
+}
+
+async function openExternalUrl(url: string): Promise<void> {
+  if (!url) {
+    return;
+  }
+  if (w3n.shell?.openURL) {
+    await w3n.shell.openURL(url);
+    return;
+  }
+
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 function rowBusy(row: ProofRowView): boolean {
   return busy.value || row.loading || row.updating || row.verifying;
+}
+
+function displayRowStatus(row: ProofRowView): ArchivedProofStatus | 'working' {
+  return row.updating || row.verifying ? 'working' : row.status;
 }
 
 function formatProofTimestamp(iso?: string): string {
@@ -293,9 +324,10 @@ async function loadProofs() {
         loading: false,
         updating: false,
         verifying: false,
-        status: existing?.status ?? 'success',
+        status: entry.status,
         bundle: structureChanged ? null : (existing?.bundle ?? null),
         note: existing?.note ?? null,
+        details: existing?.details ?? [],
       };
     });
     proofRows.value = nextRows;
@@ -430,93 +462,13 @@ function triggerDownload(filename: string, text: string) {
   URL.revokeObjectURL(url);
 }
 
-async function downloadAllFiles(row: ProofRowView) {
-  if (!row.bundle) {
-    await loadProofBundle(row);
-  }
-
-  const bundle = row.bundle;
-  if (!bundle) {
-    return;
-  }
-
-  if (bundle.meta) {
-    triggerDownload(`${row.contentHash}_meta.json`, jsonText(bundle.meta));
-  }
-  if (bundle.proof) {
-    triggerDownload(`${row.contentHash}_proof.json`, jsonText(bundle.proof));
-  }
-  if (bundle.merkleProof !== undefined) {
-    triggerDownload(`${row.contentHash}_merkle-proof.json`, jsonText(bundle.merkleProof));
-  }
-}
-
-function resolveServiceApiKey(): string | undefined {
-  return settings.userKey.trim() || undefined;
-}
-
-function getProofRequestParts(notaryEntry: ArchivedProofBundle['proof'] extends infer T
-  ? T extends { content: infer C; metadata: infer M }
-    ? C | M
-    : never
-  : never) {
-  const request = notaryEntry?.request;
-  const response = notaryEntry?.response;
-  if (!request?.kayrosHost || !request?.dataType || !response?.hash || !notaryEntry?.hash) {
-    throw new Error('Stored proof is missing Kayros registration data.');
-  }
-
-  return {
-    kayrosHost: request.kayrosHost,
-    dataType: request.dataType,
-    dataItem: notaryEntry.hash,
-    kayrosHash: response.hash,
-  };
-}
-
-async function fetchLatestMerkleProofBundle(bundle: ArchivedProofBundle) {
-  const proof = bundle.proof;
-  if (!proof) {
-    throw new Error('Missing archived proof file.');
-  }
-
-  const content = getProofRequestParts(proof.content);
-  const metadata = getProofRequestParts(proof.metadata);
-  const apiKey = resolveServiceApiKey();
-
-  setKayrosHost(content.kayrosHost);
-  const contentMerkle = await get_merkle_proof(
-    {
-      data_type: content.dataType,
-      hash: content.kayrosHash,
-    },
-    { apiKey },
-  );
-
-  setKayrosHost(metadata.kayrosHost);
-  const metadataMerkle = await get_merkle_proof(
-    {
-      data_type: metadata.dataType,
-      hash: metadata.kayrosHash,
-    },
-    { apiKey },
-  );
-
-  return {
-    version: 1,
-    content: contentMerkle,
-    metadata: metadataMerkle,
-  };
-}
-
 async function updateProofRow(row: ProofRowView) {
   if (!row.bundle) {
     await loadProofBundle(row);
   }
 
-  const bundle = row.bundle;
-  if (!bundle?.proof) {
-    row.status = 'failed';
+  if (!row.bundle?.proof) {
+    row.status = 'proof_invalid';
     row.note = 'Missing archived proof file.';
     return;
   }
@@ -524,50 +476,28 @@ async function updateProofRow(row: ProofRowView) {
   row.updating = true;
   row.note = null;
   try {
-    const latestMerkleProof = await fetchLatestMerkleProofBundle(bundle);
-    const storedMerkleProof = bundle.merkleProof as
-      | { content?: unknown; metadata?: unknown }
-      | undefined;
-
-    const incompatibilities: string[] = [];
-    if (storedMerkleProof?.content) {
-      const result = checkMerkleProofCompatibility(storedMerkleProof.content as never, latestMerkleProof.content);
-      if (!result.compatible) {
-        incompatibilities.push(`content proof incompatible (${result.mismatches[0]?.message ?? 'unknown mismatch'})`);
-      }
-    }
-    if (storedMerkleProof?.metadata) {
-      const result = checkMerkleProofCompatibility(storedMerkleProof.metadata as never, latestMerkleProof.metadata);
-      if (!result.compatible) {
-        incompatibilities.push(`metadata proof incompatible (${result.mismatches[0]?.message ?? 'unknown mismatch'})`);
-      }
-    }
-
-    if (incompatibilities.length > 0) {
-      row.status = 'failed';
-      row.note = incompatibilities.join('; ');
-      return;
-    }
-
-    await callThisAppService<
-      { dataType: string; contentHash: string; merkleProof: unknown },
-      SaveMerkleProofFileResult
+    const result = await callThisAppService<
+      { dataType: string; contentHash: string },
+      ArchivedProofActionResult
     >(
       KAYROS_SERVICE_NAME,
-      'saveMerkleProofFile',
+      'updateArchivedProof',
       {
         dataType: row.dataType,
         contentHash: row.contentHash,
-        merkleProof: latestMerkleProof,
       },
     );
 
-    bundle.merkleProof = latestMerkleProof;
-    row.hasMerkleProof = true;
-    row.status = 'success';
-    row.note = null;
+    row.status = result.status;
+    row.note = result.note;
+    row.details = result.details ?? [];
+    if (result.replacedMerkleProof) {
+      row.hasMerkleProof = true;
+      row.bundle = null;
+      await loadProofBundle(row);
+    }
+    setSuccess(result.note ?? (result.status === 'pending' ? 'Merkle proof is pending.' : 'Proof updated.'));
   } catch (err) {
-    row.status = 'failed';
     row.note = err instanceof Error ? err.message : String(err);
   } finally {
     row.updating = false;
@@ -579,9 +509,8 @@ async function verifyProofRow(row: ProofRowView) {
     await loadProofBundle(row);
   }
 
-  const bundle = row.bundle;
-  if (!bundle?.proof) {
-    row.status = 'failed';
+  if (!row.bundle?.proof) {
+    row.status = 'proof_invalid';
     row.note = 'Missing archived proof file.';
     return;
   }
@@ -589,72 +518,30 @@ async function verifyProofRow(row: ProofRowView) {
   row.verifying = true;
   row.note = null;
   try {
-    const proof = bundle.proof;
-    const content = getProofRequestParts(proof.content);
-    const metadata = getProofRequestParts(proof.metadata);
-    const apiKey = resolveServiceApiKey();
-
-    setKayrosHost(content.kayrosHost);
-    const contentVerification = await verifyWithInclusion({
-      dataType: content.dataType,
-      dataItem: content.dataItem,
-      kayrosHash: content.kayrosHash,
-      apiKey,
-    });
-
-    if (!contentVerification.valid) {
-      row.status = 'failed';
-      row.note = contentVerification.error ?? 'Content proof verification failed.';
-      return;
-    }
-
-    setKayrosHost(metadata.kayrosHost);
-    const metadataVerification = await verifyWithInclusion({
-      dataType: metadata.dataType,
-      dataItem: metadata.dataItem,
-      kayrosHash: metadata.kayrosHash,
-      apiKey,
-    });
-
-    if (!metadataVerification.valid) {
-      row.status = 'failed';
-      row.note = metadataVerification.error ?? 'Metadata proof verification failed.';
-      return;
-    }
-
-    const storedMerkleProof = bundle.merkleProof as
-      | { content?: unknown; metadata?: unknown }
-      | undefined;
-
-    if (storedMerkleProof?.content && contentVerification.details?.proof) {
-      const result = checkMerkleProofCompatibility(
-        storedMerkleProof.content as never,
-        contentVerification.details.proof as never,
-      );
-      if (!result.compatible) {
-        row.status = 'failed';
-        row.note = `Stored content merkle proof is invalid: ${result.mismatches[0]?.message ?? 'unknown mismatch'}`;
-        return;
-      }
-    }
-
-    if (storedMerkleProof?.metadata && metadataVerification.details?.proof) {
-      const result = checkMerkleProofCompatibility(
-        storedMerkleProof.metadata as never,
-        metadataVerification.details.proof as never,
-      );
-      if (!result.compatible) {
-        row.status = 'failed';
-        row.note = `Stored metadata merkle proof is invalid: ${result.mismatches[0]?.message ?? 'unknown mismatch'}`;
-        return;
-      }
-    }
-
-    row.status = 'success';
-    row.note = null;
+    const result = await callThisAppService<
+      { dataType: string; contentHash: string },
+      ArchivedProofActionResult
+    >(
+      KAYROS_SERVICE_NAME,
+      'verifyArchivedProof',
+      {
+        dataType: row.dataType,
+        contentHash: row.contentHash,
+      },
+    );
+    row.status = result.status;
+    row.note = result.note;
+    row.details = result.details ?? [];
+    setSuccess(result.note ?? (
+      result.status === 'valid'
+        ? 'Proof verified.'
+        : result.status === 'pending'
+          ? 'Merkle proof is pending.'
+          : 'Proof verification finished.'
+    ));
   } catch (err) {
-    row.status = 'failed';
     row.note = err instanceof Error ? err.message : String(err);
+    row.details = [];
   } finally {
     row.verifying = false;
   }
@@ -797,16 +684,22 @@ onBeforeUnmount(() => {
             :key="proofKey(row)"
             class="proof-history-row"
             :data-expanded="row.expanded"
-            :data-status="row.status"
+            :data-status="displayRowStatus(row)"
           >
             <button class="proof-history-summary" type="button" @click="toggleProofRow(row)">
               <span class="proof-history-status">
-                <svg v-if="row.status === 'success'" aria-hidden="true" viewBox="0 0 24 24">
+                <svg v-if="row.updating || row.verifying" class="spin" aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M12 4a8 8 0 1 1-5.66 2.34" />
+                </svg>
+                <svg v-else-if="row.status === 'valid' || row.status === 'merkle_invalid'" aria-hidden="true" viewBox="0 0 24 24">
                   <path d="m5 12 5 5L20 7" />
                 </svg>
-                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
+                <svg v-else-if="row.status === 'proof_invalid'" aria-hidden="true" viewBox="0 0 24 24">
                   <path d="M6 6l12 12" />
                   <path d="M18 6 6 18" />
+                </svg>
+                <svg v-else aria-hidden="true" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="6" />
                 </svg>
               </span>
               <span class="proof-history-time">{{ formatProofTimestamp(row.createdAt) }}</span>
@@ -894,18 +787,33 @@ onBeforeUnmount(() => {
                 <article v-if="row.bundle.meta" class="proof-file-card">
                   <div class="proof-file-head">
                     <h3>Meta</h3>
-                    <button
-                      class="icon-action"
-                      :disabled="!row.bundle.meta"
-                      title="Copy meta"
-                      aria-label="Copy meta"
-                      @click="copyText(jsonText(row.bundle.meta))"
-                    >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="9" y="9" width="10" height="10" rx="2" />
-                        <rect x="5" y="5" width="10" height="10" rx="2" />
-                      </svg>
-                    </button>
+                    <div class="proof-file-actions">
+                      <button
+                        class="icon-action"
+                        :disabled="!row.bundle.meta"
+                        title="Download meta"
+                        aria-label="Download meta"
+                        @click="triggerDownload(`${row.contentHash}_meta.json`, jsonText(row.bundle.meta))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 4v10" />
+                          <path d="m8 10 4 4 4-4" />
+                          <path d="M5 18h14" />
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-action"
+                        :disabled="!row.bundle.meta"
+                        title="Copy meta"
+                        aria-label="Copy meta"
+                        @click="copyText(jsonText(row.bundle.meta))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2" />
+                          <rect x="5" y="5" width="10" height="10" rx="2" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <textarea readonly :value="jsonText(row.bundle.meta)" />
                 </article>
@@ -913,18 +821,46 @@ onBeforeUnmount(() => {
                 <article v-if="row.bundle.proof" class="proof-file-card">
                   <div class="proof-file-head">
                     <h3>Proof</h3>
-                    <button
-                      class="icon-action"
-                      :disabled="!row.bundle.proof"
-                      title="Copy proof"
-                      aria-label="Copy proof"
-                      @click="copyText(jsonText(row.bundle.proof))"
-                    >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="9" y="9" width="10" height="10" rx="2" />
-                        <rect x="5" y="5" width="10" height="10" rx="2" />
-                      </svg>
-                    </button>
+                    <div class="proof-file-actions">
+                      <button
+                        class="icon-action"
+                        :disabled="!proofRecordUrl(row)"
+                        title="Open Kayros record"
+                        aria-label="Open Kayros record"
+                        @click="openExternalUrl(proofRecordUrl(row))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M14 4h6v6" />
+                          <path d="M10 14 20 4" />
+                          <path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4" />
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-action"
+                        :disabled="!row.bundle.proof"
+                        title="Download proof"
+                        aria-label="Download proof"
+                        @click="triggerDownload(`${row.contentHash}_proof.json`, jsonText(row.bundle.proof))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 4v10" />
+                          <path d="m8 10 4 4 4-4" />
+                          <path d="M5 18h14" />
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-action"
+                        :disabled="!row.bundle.proof"
+                        title="Copy proof"
+                        aria-label="Copy proof"
+                        @click="copyText(jsonText(row.bundle.proof))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2" />
+                          <rect x="5" y="5" width="10" height="10" rx="2" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <textarea readonly :value="jsonText(row.bundle.proof)" />
                 </article>
@@ -932,34 +868,50 @@ onBeforeUnmount(() => {
                 <article v-if="row.bundle.merkleProof !== undefined" class="proof-file-card">
                   <div class="proof-file-head">
                     <h3>Merkle proof</h3>
-                    <button
-                      class="icon-action"
-                      title="Copy merkle proof"
-                      aria-label="Copy merkle proof"
-                      @click="copyText(jsonText(row.bundle.merkleProof))"
-                    >
-                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <rect x="9" y="9" width="10" height="10" rx="2" />
-                        <rect x="5" y="5" width="10" height="10" rx="2" />
-                      </svg>
-                    </button>
+                    <div class="proof-file-actions">
+                      <button
+                        class="icon-action"
+                        title="Download merkle proof"
+                        aria-label="Download merkle proof"
+                        @click="triggerDownload(`${row.contentHash}_merkle-proof.json`, jsonText(row.bundle.merkleProof))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M12 4v10" />
+                          <path d="m8 10 4 4 4-4" />
+                          <path d="M5 18h14" />
+                        </svg>
+                      </button>
+                      <button
+                        class="icon-action"
+                        title="Copy merkle proof"
+                        aria-label="Copy merkle proof"
+                        @click="copyText(jsonText(row.bundle.merkleProof))"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2" />
+                          <rect x="5" y="5" width="10" height="10" rx="2" />
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                   <textarea readonly :value="jsonText(row.bundle.merkleProof)" />
                 </article>
 
                 <div class="proof-action-stack">
-                  <button class="proof-action-btn" :disabled="rowBusy(row)" @click="downloadAllFiles(row)">
-                    Download all
-                  </button>
                   <button class="proof-action-btn" :disabled="rowBusy(row) || !row.bundle.proof" @click="updateProofRow(row)">
-                    Update
+                    {{ row.updating ? 'Syncing Merkle proof…' : 'Sync Merkle proof' }}
                   </button>
                   <button class="proof-action-btn" :disabled="rowBusy(row) || !row.bundle.proof" @click="verifyProofRow(row)">
-                    Verify
+                    {{ row.verifying ? 'Verifying…' : 'Verify' }}
                   </button>
                 </div>
 
                 <p v-if="row.note" class="proof-note">{{ row.note }}</p>
+                <ul v-if="row.details.length" class="proof-details-list">
+                  <li v-for="(detail, index) in row.details" :key="`${row.contentHash}-detail-${index}`">
+                    {{ detail }}
+                  </li>
+                </ul>
               </template>
 
               <p v-else class="empty-state">No archived proof bundle.</p>

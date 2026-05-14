@@ -48,6 +48,7 @@
   --kayros-accent-border: color-mix(in srgb, var(--color-bg-control-accent-default) 35%, var(--default-outline-focused));
   --kayros-active-tab-bg: color-mix(in srgb, var(--color-bg-control-accent-default) 10%, transparent);
   --w-success: var(--success-content-default);
+  --w-warning: var(--warning-content-default);
   --w-danger: var(--error-content-default);
   --w-danger-fill: var(--error-content-pressed);
 }
@@ -498,14 +499,29 @@ button:disabled {
   transform: rotate(180deg);
 }
 
-.proof-history-row[data-status='success'] .proof-history-status {
+.proof-history-row[data-status='valid'] .proof-history-status {
   background-color: color-mix(in srgb, var(--w-success) 16%, transparent);
   color: var(--w-success);
 }
 
-.proof-history-row[data-status='failed'] .proof-history-status {
+.proof-history-row[data-status='pending'] .proof-history-status,
+.proof-history-row[data-status='working'] .proof-history-status {
+  background-color: color-mix(in srgb, var(--w-warning) 18%, transparent);
+  color: var(--w-warning);
+}
+
+.proof-history-row[data-status='pending'] .proof-history-status svg {
+  fill: currentColor;
+}
+
+.proof-history-row[data-status='merkle_invalid'] .proof-history-status,
+.proof-history-row[data-status='proof_invalid'] .proof-history-status {
   background-color: color-mix(in srgb, var(--w-danger) 18%, transparent);
   color: var(--w-danger);
+}
+
+.proof-history-status .spin {
+  animation: spin 900ms linear infinite;
 }
 
 .proof-history-details {
@@ -566,6 +582,12 @@ button:disabled {
   gap: var(--spacing-s, 8px);
 }
 
+.proof-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .proof-file-head h3 {
   margin: 0;
   font-size: 12px;
@@ -622,6 +644,16 @@ button:disabled {
   color: var(--kayros-text-mute);
 }
 
+.proof-details-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--kayros-text-mute);
+  font-size: 12px;
+  line-height: 18px;
+  display: grid;
+  gap: 4px;
+}
+
 .danger-panel {
   border-color: var(--w-danger-fill);
 }
@@ -674,6 +706,16 @@ button:disabled {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
   }
 }
 
