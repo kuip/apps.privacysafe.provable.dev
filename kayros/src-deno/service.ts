@@ -15,6 +15,9 @@ const SHA256_ALGORITHM = "SHA-256";
 const KAYROS_REGISTER_RETRIES = 3;
 const KAYROS_REGISTER_RETRY_DELAY_MS = 200;
 const KAYROS_MERKLE_FETCH_DELAYS_MS = [10_000, 20_000] as const;
+const KAYROS_RECORD_FETCH_ATTEMPTS = 3;
+const KAYROS_RECORD_FETCH_INITIAL_DELAY_MS = 1_000;
+const KAYROS_RECORD_FETCH_RETRY_DELAY_MS = 3_000;
 const UUID_GREGORIAN_EPOCH = 122192928000000000n;
 const PROVABLE_SDK_SERVICE = "@kuip/provable-sdk@0.1.2:prove_single_hash";
 
@@ -265,16 +268,33 @@ function buildProofArchivePaths(dataType: string, contentHash: string) {
 }
 
 async function getProofsRootFS() {
-  const fs = await w3n.storage.getAppSyncedFS();
-  await fs.makeFolder(PROOFS_ROOT_FOLDER).catch(() => {});
-  return await fs.writableSubRoot(PROOFS_ROOT_FOLDER);
+  try {
+    const fs = await w3n.storage.getAppSyncedFS();
+    await fs.makeFolder(PROOFS_ROOT_FOLDER).catch(() => {});
+    return await fs.writableSubRoot(PROOFS_ROOT_FOLDER);
+  } catch (err) {
+    await w3n?.log?.("error", "Failed to open Kayros proofs root FS.", {
+      root: PROOFS_ROOT_FOLDER,
+      error: formatError(err),
+    });
+    throw err;
+  }
 }
 
 async function getProofArchiveFolderFS(dataType: string) {
-  const rootFs = await getProofsRootFS();
   const archivePaths = buildProofArchivePaths(dataType, "");
-  await rootFs.makeFolder(archivePaths.dataTypeFolder).catch(() => {});
-  return await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+  try {
+    const rootFs = await getProofsRootFS();
+    await rootFs.makeFolder(archivePaths.dataTypeFolder).catch(() => {});
+    return await rootFs.writableSubRoot(archivePaths.dataTypeFolder);
+  } catch (err) {
+    await w3n?.log?.("error", "Failed to open Kayros proof archive folder FS.", {
+      dataType,
+      folder: archivePaths.dataTypeFolder,
+      error: formatError(err),
+    });
+    throw err;
+  }
 }
 
 type ProofIndexEntry = {
@@ -325,13 +345,17 @@ function normalizeProofIndexEntry(entry: unknown): ProofIndexEntry | null {
 }
 
 async function readProofIndex(): Promise<ProofIndexEntry[]> {
-  const proofsFs = await getProofsRootFS();
   try {
+    const proofsFs = await getProofsRootFS();
     const raw = await proofsFs.readJSONFile(PROOFS_INDEX_FILE);
     return Array.isArray(raw)
       ? raw.map(normalizeProofIndexEntry).filter((entry): entry is ProofIndexEntry => entry !== null)
       : [];
-  } catch {
+  } catch (err) {
+    await w3n?.log?.("info", "Kayros proof index read fallback.", {
+      file: PROOFS_INDEX_FILE,
+      error: formatError(err),
+    });
     return [];
   }
 }
@@ -473,27 +497,67 @@ async function storeArchivedProofBundle(
   const archivePaths = buildProofArchivePaths(dataType, contentHash);
   const folderFs = await getProofArchiveFolderFS(dataType);
 
-  await folderFs.writeJSONFile(archivePaths.proofFileName, proof);
+  try {
+    await folderFs.writeJSONFile(archivePaths.proofFileName, proof);
+  } catch (err) {
+    await w3n?.log?.("error", "Failed writing archived Kayros proof file.", {
+      dataType,
+      contentHash,
+      path: archivePaths.proofFileName,
+      error: formatError(err),
+    });
+    throw err;
+  }
   if (metadataProof !== undefined) {
-    await folderFs.writeJSONFile(archivePaths.metadataProofFileName, metadataProof);
+    try {
+      await folderFs.writeJSONFile(archivePaths.metadataProofFileName, metadataProof);
+    } catch (err) {
+      await w3n?.log?.("error", "Failed writing archived Kayros metadata proof file.", {
+        dataType,
+        contentHash,
+        path: archivePaths.metadataProofFileName,
+        error: formatError(err),
+      });
+      throw err;
+    }
   }
 
   if (merkleProof !== undefined) {
-    await folderFs.writeJSONFile(archivePaths.merkleProofFileName, merkleProof);
+    try {
+      await folderFs.writeJSONFile(archivePaths.merkleProofFileName, merkleProof);
+    } catch (err) {
+      await w3n?.log?.("error", "Failed writing archived Kayros merkle proof file.", {
+        dataType,
+        contentHash,
+        path: archivePaths.merkleProofFileName,
+        error: formatError(err),
+      });
+      throw err;
+    }
   }
 
   const indexEntries = await readProofIndex();
-  await writeProofIndex(upsertProofIndexEntry(indexEntries, {
-    dataType,
-    contentHash,
-    title: typeof title === "string" && title.trim() ? title.trim() : undefined,
-    createdAt: meta?.createdAt,
-    status: statusOverride ?? (merkleProof !== undefined ? "valid" : "valid"),
-    hasProof: true,
-    hasMerkleProof: merkleProof !== undefined,
-    hasCandidateMerkleProof: false,
-    hasMeta: metadataProof !== undefined,
-  }));
+  try {
+    await writeProofIndex(upsertProofIndexEntry(indexEntries, {
+      dataType,
+      contentHash,
+      title: typeof title === "string" && title.trim() ? title.trim() : undefined,
+      createdAt: meta?.createdAt,
+      status: statusOverride ?? (merkleProof !== undefined ? "valid" : "valid"),
+      hasProof: true,
+      hasMerkleProof: merkleProof !== undefined,
+      hasCandidateMerkleProof: false,
+      hasMeta: metadataProof !== undefined,
+    }));
+  } catch (err) {
+    await w3n?.log?.("error", "Failed writing Kayros proof index.", {
+      dataType,
+      contentHash,
+      error: formatError(err),
+      title: typeof title === "string" ? title : undefined,
+    });
+    throw err;
+  }
 }
 
 async function storeArchivedMerkleProof(
@@ -661,6 +725,38 @@ async function getRecordByHash(
   }
 
   return await response.json();
+}
+
+async function getRecordByHashWithRetry(
+  host: string,
+  recordHash: string,
+  dataType: string,
+  userKey?: string,
+) {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= KAYROS_RECORD_FETCH_ATTEMPTS; attempt += 1) {
+    if (attempt === 1) {
+      await sleep(KAYROS_RECORD_FETCH_INITIAL_DELAY_MS);
+    }
+    try {
+      return await getRecordByHash(host, recordHash, dataType, userKey);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= KAYROS_RECORD_FETCH_ATTEMPTS) {
+        break;
+      }
+      logInfo("Retrying Kayros record fetch after failure", {
+        attempt,
+        nextAttempt: attempt + 1,
+        delayMs: KAYROS_RECORD_FETCH_RETRY_DELAY_MS,
+        dataType,
+        recordHash,
+        error: formatError(err),
+      });
+      await sleep(KAYROS_RECORD_FETCH_RETRY_DELAY_MS);
+    }
+  }
+  throw lastErr;
 }
 
 async function getRecordByDataItem(
@@ -1575,6 +1671,12 @@ class KayrosService {
 
   async notarizeStoredFile(request: any, file: any) {
     const stored = await readSettings();
+    logInfo("Starting Kayros notarizeStoredFile", {
+      fullFilePath: request?.fullFilePath,
+      fsId: request?.fsId,
+      originalName: request?.metadataPayload?.originalName,
+      size: request?.metadataPayload?.size,
+    });
     const fileBytes = await file.readBytes();
     if (!fileBytes) {
       throw new Error("Stored file is empty or unreadable.");
@@ -1589,6 +1691,13 @@ class KayrosService {
       this.registerHash({ hash: contentHash, skipArchive: true }),
       this.registerHash({ hash: metadataHash, skipArchive: true }),
     ]);
+    logInfo("Completed Kayros registerHash calls for stored file", {
+      fullFilePath: request?.fullFilePath,
+      contentStatus: contentResult.status,
+      metadataStatus: metadataResult.status,
+      contentHash,
+      metadataHash,
+    });
 
     const content = contentResult.status === "fulfilled"
       ? buildSuccessEntry("content", contentHash, contentResult.value)
@@ -1650,7 +1759,7 @@ class KayrosService {
         "PrivacySafe_file",
         proof.content.hash,
         contentResult.status === "fulfilled" ? contentResult.value.response : proof.content.response,
-        await getRecordByHash(
+        await getRecordByHashWithRetry(
           stored.kayrosHost,
           contentResult.status === "fulfilled" ? contentResult.value.response.hash : proof.content.response.hash,
           archivedDataType,
@@ -1662,7 +1771,7 @@ class KayrosService {
         "PrivacySafe_file_metadata",
         proof.metadata.hash,
         metadataResult.status === "fulfilled" ? metadataResult.value.response : proof.metadata.response,
-        await getRecordByHash(
+        await getRecordByHashWithRetry(
           stored.kayrosHost,
           metadataResult.status === "fulfilled" ? metadataResult.value.response.hash : proof.metadata.response.hash,
           archivedDataType,
