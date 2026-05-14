@@ -53,6 +53,7 @@ const busy = ref(false);
 const deleteConfirmText = ref('');
 const removeProofTarget = ref<ProofRowView | null>(null);
 const successMessage = ref('');
+const showUserKey = ref(false);
 let successMessageTimer: number | undefined;
 
 const registerResult = ref<RegisterHashResult | null>(null);
@@ -704,6 +705,7 @@ onBeforeUnmount(() => {
         <img alt="Kayros" class="brand__logo" src="/logo.png" />
         <div class="brand__center">
           <h1>Kayros</h1>
+          <p class="brand__subtitle">cryptographic data integrity proofs</p>
         </div>
       </div>
     </section>
@@ -1117,7 +1119,7 @@ onBeforeUnmount(() => {
         <div class="panel-head">
           <h2>Register hash</h2>
           <button :disabled="busy || !registerHash.trim() || !registerHashTitle.trim()" @click="notarizeCurrentHash">
-            Notarize
+            Register
           </button>
         </div>
 
@@ -1149,7 +1151,7 @@ onBeforeUnmount(() => {
         <div class="panel-head">
           <h2>Register raw content</h2>
           <button :disabled="busy || !registerRawContent.trim() || !registerRawTitle.trim()" @click="notarizeRawContent">
-            Hash and notarize
+            Hash and register
           </button>
         </div>
 
@@ -1197,7 +1199,25 @@ onBeforeUnmount(() => {
 
         <label>
           <span>User key</span>
-          <input v-model.trim="settings.userKey" autocomplete="off" />
+          <div class="input-with-action">
+            <input
+              v-model.trim="settings.userKey"
+              autocomplete="off"
+              :type="showUserKey ? 'text' : 'password'"
+            />
+            <button
+              class="icon-action"
+              type="button"
+              :aria-label="showUserKey ? 'Hide user key' : 'Show user key'"
+              :title="showUserKey ? 'Hide user key' : 'Show user key'"
+              @click="showUserKey = !showUserKey"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
         </label>
 
         <label class="toggle-row">

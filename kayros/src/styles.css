@@ -141,6 +141,13 @@ h2 {
   flex: 1;
 }
 
+.brand__subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--kayros-text-mute);
+}
+
 .tabbar {
   display: flex;
   align-items: center;
@@ -237,6 +244,13 @@ label > span:first-child {
   font-size: 12px;
   line-height: 16px;
   font-weight: 700;
+}
+
+.input-with-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--spacing-s, 8px);
+  align-items: center;
 }
 
 .toggle-row {
