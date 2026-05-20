@@ -1,6 +1,6 @@
 # Wallet
 
-Minimal wallet app for PrivacySafe.
+Minimal wallet app for PrivacySafe (https://github.com/PrivacySafe/privacysafe-platform-electron).
 
 V1 covers:
 - Ethereum and Solana support on mainnet and configured testnets.
@@ -15,6 +15,12 @@ V1 covers:
 - Wallet-level encryption for seed phrases and private keys, stored inside PrivacySafe synced storage.
 - Wallet lock and unlock with a wallet password.
 - Settings for requiring wallet password confirmation before transfers, message signing, and transaction signing.
+
+## DEMOs
+
+- https://youtu.be/OpUqX_FbbDU (base wallet functionality)
+- https://youtu.be/DwOyGGhGwBM (external requests from other PrivacySafe apps with user confirmation dialog)
+- https://youtu.be/l0cuFoQMc04 NEW design
 
 ## Dependency Lock Policy
 

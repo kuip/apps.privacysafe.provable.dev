@@ -1,5 +1,7 @@
 # nomen.app.provable.dev
 
+EXPERIMENTAL
+
 PrivacySafe helper app for:
 
 - linking a PrivacySafe identity into Nomen

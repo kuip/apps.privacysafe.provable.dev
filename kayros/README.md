@@ -1,6 +1,15 @@
-# Kayros PrivacySafe App
+# Kayros App for PrivacySafe
 
-This repository scaffolds a PrivacySafe subapp for Kayros cryptographic integrity proofs for files and data.
+This repository scaffolds an app for Kayros cryptographic integrity proofs for files and data, that works in the PrivacySafe environment (https://github.com/PrivacySafe/privacysafe-platform-electron).
+
+Features:
+- register data integrity proofs for arbitrary data with Kayros indexers (https://provable.dev)
+- store Merkle proofs & manage them (sync, verify)
+- automatically register an integrity proof for uploaded files in the Storage app (works with this fork: https://github.com/kuip/files.app.privacysafe.io/tree/kayros-changes)
+
+## DEMOs
+
+- https://youtu.be/2x3JgpubZ30
 
 It contains:
 
