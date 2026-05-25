@@ -5,6 +5,7 @@ on:
     tags:
       - 'kayros-v*'
       - 'nomen-v*'
+      - 'wallet-v*'
   workflow_dispatch:
 
 permissions:
@@ -31,14 +32,19 @@ jobs:
           cache-dependency-path: |
             kayros/package-lock.json
             nomen/package-lock.json
+            wallet/package-lock.json
       - run: npm ci
         working-directory: kayros
       - run: npm ci
         working-directory: nomen
+      - run: npm ci
+        working-directory: wallet
       - run: npm run pack:discovery
         working-directory: kayros
       - run: npm run pack:discovery
         working-directory: nomen
+      - run: npm run pack:discovery
+        working-directory: wallet
       - run: node scripts/build-pages-site.mjs
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

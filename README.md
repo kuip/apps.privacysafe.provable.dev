@@ -1,6 +1,14 @@
 # apps.privacysafe.provable.dev
 
-Shared repo for Provable PrivacySafe apps.
+Shared repo for Provable apps, for the PrivacySafe secure environment (https://github.com/privacysafe).
+
+## Install in PrivacySafe
+
+Install from:
+* kayros.app.provable.dev
+* wallet.app.provable.dev
+
+Or add the release build in your PrivacySafe app.
 
 ## Domain discovery
 
@@ -30,6 +38,9 @@ npm run pack:discovery
 cd ./apps.privacysafe.provable.dev/nomen
 npm run pack:discovery
 
+cd ./apps.privacysafe.provable.dev/wallet
+npm run pack:discovery
+
 cd ./apps.privacysafe.provable.dev
 node scripts/build-pages-site.mjs
 ```
@@ -40,6 +51,7 @@ This generates:
 - `build/pages/CNAME`
 - `build/pages/kayros/...`
 - `build/pages/nomen/...`
+- `build/pages/wallet/...`
 
 ## Release model
 
@@ -53,6 +65,7 @@ Current workflow intent:
 - push to `main`: validate/build only
 - tag like `kayros-v0.1.17`: publish Pages and create Kayros release assets
 - tag like `nomen-v0.1.1`: publish Pages and create Nomen release assets
+- tag like `wallet-v0.1.1`: publish Pages and create Wallet release assets
 
 Recommended release flow:
 
@@ -60,6 +73,7 @@ Recommended release flow:
 cd ./apps.privacysafe.provable.dev
 make publish-kayros
 make publish-nomen
+make publish-wallet
 ```
 
 These commands will:
@@ -83,6 +97,7 @@ Tag conventions:
 
 - Kayros: `kayros-vX.Y.Z`
 - Nomen: `nomen-vX.Y.Z`
+- Wallet: `wallet-vX.Y.Z`
 
 ## Publish Kayros discovery files manually
 
@@ -95,6 +110,18 @@ node scripts/build-pages-site.mjs
 ```
 
 This updates the hosted discovery tree under `./build/pages/kayros/`.
+
+## Publish Wallet discovery files manually
+
+```bash
+cd wallet
+npm run pack:discovery
+
+cd ..
+node scripts/build-pages-site.mjs
+```
+
+This updates the hosted discovery tree under `./build/pages/wallet/`.
 
 ## Standalone App Builds
 

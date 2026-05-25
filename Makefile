@@ -1,4 +1,4 @@
-.PHONY: build-apps build-kayros build-nomen build-wallet build-wallet-test-external kayros publish-kayros nomen publish-nomen wallet wallet-test-external
+.PHONY: build-apps build-kayros build-nomen build-wallet build-wallet-test-external kayros publish-kayros nomen publish-nomen wallet publish-wallet wallet-test-external
 
 build-kayros:
 	cd kayros && npm run pack
@@ -28,7 +28,10 @@ publish-nomen:
 	./scripts/release-nomen.sh
 
 wallet:
-	@echo "Use 'make build-wallet' while wallet release flow is still manual."
+	@echo "Use 'make publish-wallet' to release Wallet."
+
+publish-wallet:
+	./scripts/release-wallet.sh
 
 wallet-test-external:
 	@echo "Use 'make build-wallet-test-external' for the wallet external test app."

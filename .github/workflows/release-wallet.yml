@@ -1,0 +1,51 @@
+name: Release Wallet
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'wallet-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: wallet/package-lock.json
+
+      - run: npm ci
+        working-directory: wallet
+
+      - run: npm run pack
+        working-directory: wallet
+      - run: npm run pack:discovery
+        working-directory: wallet
+
+      - run: node scripts/build-pages-site.mjs
+
+      - name: Archive discovery site
+        run: tar -C build -czf wallet/build/wallet.app.provable.dev-discovery-${{ github.ref_name || 'manual' }}.tar.gz pages
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallet-build-assets
+          path: |
+            wallet/build/*.zip
+            wallet/build/*.tar.gz
+
+      - name: Publish release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wallet/build/*.zip
+            wallet/build/*.tar.gz
